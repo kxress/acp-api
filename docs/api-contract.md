@@ -5,6 +5,10 @@ in-process and injects a fake ACP runtime with fixed text or tool-call returns.
 Tests use only local loopback HTTP and never contact OpenAI, Anthropic, or
 another model service.
 
+The ACP session lifecycle tests also launch a fake local agent for both ACP v1
+and v2. They verify that each generation gets and closes an isolated session
+while the agent process and connection stay warm.
+
 The optional LangChain client suite uses the official Python provider clients
 and LangMem against the same kind of local fake ACP runtime. Install its pinned
 test dependencies and run `npm run test:langchain` from an activated virtual

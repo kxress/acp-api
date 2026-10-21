@@ -48,16 +48,20 @@ ACP model selection succeeds, they also include `X-ACP-Upstream-Model`.
 
 ## Agent pools and model selection
 
-Each `agents[]` entry starts one long-lived ACP runtime. Multiple entries can
-advertise the same model ID to form a pool. `models` lists the OpenAI IDs routed
-to that runtime. The proxy supports `sticky_failover`, `primary_failover`,
-`round_robin`, and `least_busy` routing strategies.
+Each `agents[]` entry starts one long-lived ACP process and connection. Every
+generation request opens a fresh ACP session on that connection and closes it
+when the request finishes. The proxy sends the full history present in the
+request once and does not carry conversation state between requests. Multiple
+entries can advertise the same model ID to form a pool. `models` lists the
+OpenAI IDs routed to that runtime. The proxy supports `sticky_failover`,
+`primary_failover`, `round_robin`, and `least_busy` routing strategies.
 
 Server options include `host`, `port`, `api_key`, `routing_strategy`,
 `max_retries`, `failure_cooldown_seconds`, `retry_backoff_seconds`,
 `max_sessions`, `max_body_bytes`, and `request_timeout_ms`. Each agent entry
 accepts `name`, `instance_id`, `command`, `args`, `cwd`, `env`, `models`,
 `permission`, `acp_protocol`, and optional `model_selection`.
+`max_sessions` limits the number of simultaneously open request sessions.
 
 An ACP runtime's provider model stays at its own default unless it supports
 `session/set_config_option` and the entry has `model_selection` configured:

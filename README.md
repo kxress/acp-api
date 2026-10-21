@@ -2,8 +2,9 @@
 
 `acp-api` runs configured Agent Client Protocol (ACP) agents behind OpenAI- and
 Anthropic-compatible HTTP APIs. It starts ACP agents as local stdio subprocesses,
-reuses their long-lived sessions, and translates HTTP requests into ACP prompts.
-The service does not call model providers directly.
+keeps their connections open, and creates an isolated ACP session for each API
+generation request. The service translates HTTP requests into ACP prompts and
+does not call model providers directly.
 
 ## Requirements
 
@@ -41,10 +42,14 @@ Response headers identify the selected ACP runtime and model.
 
 ## ACP runtime behavior
 
-Each configured agent is started once and keeps one ACP session open. Multiple
-agents can advertise the same OpenAI model ID to form a pool. The router supports
-sticky failover, primary failover, round-robin, and least-busy selection. A
-failed runtime is cooled down briefly while another pool member is tried.
+Each configured agent is started once and keeps its ACP connection open. Every
+API generation gets a fresh ACP session on that connection, which is closed when
+the request finishes. The full message history supplied by the client is sent
+once in that session; the proxy does not retain conversation state between
+requests. Multiple agents can advertise the same OpenAI model ID to form a pool.
+The router supports sticky failover, primary failover, round-robin, and least-busy
+selection. A failed runtime is cooled down briefly while another pool member is
+tried.
 
 `agents[].models` lists the OpenAI model IDs routed to that runtime. It does not
 change the provider model selected inside the ACP agent. Configure

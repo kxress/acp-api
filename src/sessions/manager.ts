@@ -19,17 +19,18 @@ interface ManagedSession {
   id: string;
   agentId: string;
   agentDefinition: AgentDefinition;
+  agent: ManagedAgent;
   cwd: string;
   acpSessionId: string;
   acpProtocol: AcpProtocol;
   driver: ProtocolDriver;
-  process: Awaited<ReturnType<typeof startAgent>>;
   promptActive: boolean;
   capabilities: unknown;
   authMethods: unknown;
   configOptions: Array<Record<string, unknown>>;
   modes: Record<string, unknown> | undefined;
   prompt?: PromptRecord;
+  closePromise?: Promise<void>;
   events: SessionEvent[];
   nextSequence: number;
   droppedThrough: number;
@@ -41,6 +42,22 @@ interface ManagedSession {
   };
   pendingPermissions: Map<string, PendingPermission>;
   permissionLease?: ReturnType<typeof setTimeout>;
+}
+
+interface ManagedAgent {
+  id: string;
+  agentDefinition: AgentDefinition;
+  cwd: string;
+  process: Awaited<ReturnType<typeof startAgent>>;
+  driver: ProtocolDriver;
+  capabilities: unknown;
+  authMethods: unknown;
+  sessions: Map<string, ManagedSession>;
+  earlyUpdates: Map<string, NormalizedAcpUpdate[]>;
+  closedSessionIds: Set<string>;
+  closedSessionOrder: string[];
+  closed: boolean;
+  closePromise?: Promise<void>;
 }
 
 export interface SessionEvent {
@@ -110,6 +127,17 @@ export interface SessionSnapshot {
   readonly nextSequence: number;
 }
 
+export interface AgentSnapshot {
+  readonly id: string;
+  readonly implementation?: string;
+  readonly cwd: string;
+  readonly acpProtocol: AcpProtocol;
+  readonly capabilities: unknown;
+  readonly authMethods: unknown;
+  readonly modelConfigId?: string;
+  readonly models?: AgentModelPolicy;
+}
+
 export interface PromptHandle {
   readonly id: string;
   readonly state: PromptRecord["state"];
@@ -125,6 +153,7 @@ export interface PromptHandle {
 
 export interface SessionLaunchOptions {
   agentDefinition?: AgentDefinition;
+  signal?: AbortSignal;
 }
 
 type PendingPermissionSnapshot = SessionSnapshot["pendingPermissions"][number];
@@ -148,6 +177,40 @@ function configOptionsFromUpdate(
   return options as Array<Record<string, unknown>>;
 }
 
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Request aborted", "AbortError");
+}
+
+async function raceWithAbort<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal,
+  onAbort?: (error: Error) => void,
+): Promise<T> {
+  if (!signal) return await promise;
+  if (signal.aborted) {
+    const error = abortError(signal);
+    onAbort?.(error);
+    throw error;
+  }
+  let listener: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    listener = () => {
+      const error = abortError(signal);
+      onAbort?.(error);
+      reject(error);
+    };
+    signal.addEventListener("abort", listener, { once: true });
+    if (signal.aborted) listener();
+  });
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    if (listener) signal.removeEventListener("abort", listener);
+  }
+}
+
 export const DEFAULT_SESSION_START_TIMEOUT_MS = 30_000;
 export const DEFAULT_SESSION_CLOSE_TIMEOUT_MS = 5_000;
 export const DEFAULT_ASYNC_CONFIG_OPTION_TIMEOUT_MS = 5_000;
@@ -168,6 +231,8 @@ interface PendingPermission {
 
 export class SessionManager {
   private readonly sessions = new Map<string, ManagedSession>();
+  private readonly managedAgents = new Map<string, ManagedAgent>();
+  private readonly connectingAgents = new Map<string, Promise<AgentSnapshot>>();
   private readonly configOptionWaiters = new Map<
     string,
     Set<ConfigOptionWaiter>
@@ -176,6 +241,7 @@ export class SessionManager {
   private readonly startupTimeoutMs: number;
   private readonly closeRequestTimeoutMs: number;
   private readonly maxSessions: number;
+  private closing = false;
 
   constructor(
     agents: AgentMap,
@@ -268,6 +334,21 @@ export class SessionManager {
     };
   }
 
+  private agentSnapshot(agent: ManagedAgent): AgentSnapshot {
+    return {
+      id: agent.id,
+      implementation: agent.agentDefinition.implementation,
+      cwd: agent.cwd,
+      acpProtocol: agent.driver.protocol,
+      capabilities: structuredClone(agent.capabilities),
+      authMethods: structuredClone(agent.authMethods),
+      modelConfigId: agent.agentDefinition.modelConfigId,
+      models: agent.agentDefinition.models
+        ? structuredClone(agent.agentDefinition.models)
+        : undefined,
+    };
+  }
+
   private promptHandle(prompt: PromptRecord): PromptHandle {
     return {
       get id() {
@@ -327,55 +408,34 @@ export class SessionManager {
     session.pendingPermissions.clear();
   }
 
-  start(
+  async connectAgent(
     agentId: string,
     cwd = process.cwd(),
-    config: Record<string, string> = {},
-    modeId?: string,
-    permissionPolicy: PermissionPolicy = "read_only",
     options: SessionLaunchOptions = {},
-  ): Promise<SessionSnapshot> {
-    return this.launch(
-      agentId,
-      cwd,
-      config,
-      modeId,
-      permissionPolicy,
-      undefined,
-      options,
-    ).then((session) => this.sessionSnapshot(session));
-  }
+  ): Promise<AgentSnapshot> {
+    if (this.closing) throw new Error("Session manager is shutting down");
+    if (options.signal?.aborted) throw abortError(options.signal);
+    const active = this.managedAgents.get(agentId);
+    if (active && !active.closed) return this.agentSnapshot(active);
+    const connecting = this.connectingAgents.get(agentId);
+    if (connecting) return await raceWithAbort(connecting, options.signal);
 
-  load(
-    agentId: string,
-    acpSessionId: string,
-    cwd: string,
-    permissionPolicy: PermissionPolicy = "read_only",
-    options: SessionLaunchOptions = {},
-  ): Promise<SessionSnapshot> {
-    return this.launch(
-      agentId,
-      cwd,
-      {},
-      undefined,
-      permissionPolicy,
-      acpSessionId,
-      options,
-    ).then((session) => this.sessionSnapshot(session));
-  }
-
-  private async launch(
-    agentId: string,
-    cwd: string,
-    config: Record<string, string>,
-    modeId: string | undefined,
-    permissionPolicy: PermissionPolicy,
-    loadSessionId?: string,
-    options: SessionLaunchOptions = {},
-  ): Promise<ManagedSession> {
-    if (this.sessions.size >= this.maxSessions) {
-      throw new Error(`Active session limit (${this.maxSessions}) reached`);
+    const pending = this.launchAgent(agentId, cwd, options);
+    this.connectingAgents.set(agentId, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.connectingAgents.get(agentId) === pending) {
+        this.connectingAgents.delete(agentId);
+      }
     }
+  }
+
+  private async launchAgent(
+    agentId: string,
+    cwd: string,
+    options: SessionLaunchOptions,
+  ): Promise<AgentSnapshot> {
     const def = options.agentDefinition ?? this.agents[agentId];
     if (!def) throw new Error(`Unknown agent: ${agentId}`);
     const protocol = def.acpProtocol ?? "v1";
@@ -388,154 +448,186 @@ export class SessionManager {
       ...def,
       env: { ...def.protocolEnv?.[protocol], ...def.env },
     };
-    const process = await startAgent(launchDefinition, cwd);
-    const earlyUpdates: NormalizedAcpUpdate[] = [];
-    let wakeStartupUpdate: (() => void) | undefined;
-    const driver = createProtocolDriver(protocol, def, process, {
-      update: (update) => {
-        const managed = [...this.sessions.values()].find(
-          (item) => item.acpSessionId === update.sessionId,
-        );
-        if (!managed) {
-          earlyUpdates.push(update);
-          wakeStartupUpdate?.();
-        } else this.receiveUpdate(managed, update);
-      },
-      permission: (request) =>
-        this.requestPermission(request, permissionPolicy),
-    });
+    const childProcess = await startAgent(launchDefinition, cwd);
+    let agent: ManagedAgent | undefined;
+    let driver: ProtocolDriver | undefined;
     let startupTimer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const startup = async () => {
-        const initialized = await driver.initialize();
-        const sessionResponse = loadSessionId
-          ? await driver.resumeSession(loadSessionId, cwd)
-          : await driver.newSession(cwd);
-        const acpId = sessionResponse.sessionId;
-        let configOptions = [...sessionResponse.configOptions];
-        let configOptionsEarlyUpdateCursor = 0;
-        let appliedEarlyUpdates = 0;
-        const applyEarlyConfigUpdates = () => {
-          for (
-            ;
-            appliedEarlyUpdates < earlyUpdates.length;
-            appliedEarlyUpdates++
-          ) {
-            const update = earlyUpdates[appliedEarlyUpdates];
-            const options = configOptionsFromUpdate(update);
-            if (options) configOptions = options;
-          }
-        };
-        let modes = sessionResponse.modes;
-        const modelConfigIds = new Set(
-          configOptions.flatMap((option) => {
-            const id = typeof option.id === "string" ? option.id : undefined;
-            if (
-              id &&
-              (option.category === "model" ||
-                ((option.category === undefined || option.category === null) &&
-                  id === def.modelConfigId))
-            )
-              return [id];
-            return [];
-          }),
-        );
-        const desired = Object.entries(config).sort(
-          ([a], [b]) =>
-            Number(modelConfigIds.has(b)) - Number(modelConfigIds.has(a)),
-        );
-        for (const [configId, value] of desired) {
-          applyEarlyConfigUpdates();
-          let option = configOptions.find((item) => item.id === configId);
-          while (!option && configOptions.length) {
-            const received = await new Promise<boolean>((resolve) => {
-              const timer = setTimeout(() => {
-                if (wakeStartupUpdate === wake) wakeStartupUpdate = undefined;
-                resolve(false);
-              }, DEFAULT_ASYNC_CONFIG_OPTION_TIMEOUT_MS);
-              const wake = () => {
-                clearTimeout(timer);
-                if (wakeStartupUpdate === wake) wakeStartupUpdate = undefined;
-                resolve(true);
-              };
-              wakeStartupUpdate = wake;
-            });
-            if (!received) break;
-            applyEarlyConfigUpdates();
-            option = configOptions.find((item) => item.id === configId);
-          }
-          if (!option && configOptions.length) {
-            throw new Error(`Unknown config option: ${configId}`);
-          }
-          if (option?.type === "select" && Array.isArray(option.options)) {
-            const values = (
-              option.options as Array<Record<string, unknown>>
-            ).flatMap((entry) =>
-              Array.isArray(entry.options)
-                ? (entry.options as Array<Record<string, unknown>>)
-                : [entry],
-            );
-            if (
-              values.length &&
-              !values.some((entry) => entry.value === value)
-            ) {
-              throw new Error(
-                `Invalid value '${value}' for config option '${configId}'`,
-              );
-            }
-          }
-          configOptions = await driver.setConfigOption(
-            acpId,
-            configId,
-            value,
-            option,
-          );
-          configOptionsEarlyUpdateCursor = earlyUpdates.length;
-        }
-        if (modeId) {
-          modes =
-            (await driver.setMode(acpId, modeId, configOptions, modes)) ??
-            modes;
-        }
-        return {
-          initialized,
-          sessionResponse,
-          configOptions,
-          modes,
-          configOptionsEarlyUpdateCursor,
-        };
-      };
-      const timedOut = new Promise<never>((_, reject) => {
-        startupTimer = setTimeout(() => {
-          const error = new Error(
-            `ACP session startup timed out after ${this.startupTimeoutMs}ms`,
-          );
-          driver.closeConnection(error);
-          reject(error);
-        }, this.startupTimeoutMs);
+      driver = createProtocolDriver(protocol, def, childProcess, {
+        update: (update) => {
+          if (agent) this.receiveAgentUpdate(agent, update);
+        },
+        permission: (request) =>
+          agent
+            ? this.requestPermission(request, agent)
+            : Promise.resolve({ outcome: { outcome: "cancelled" } }),
       });
-      const {
-        initialized,
-        sessionResponse,
-        configOptions,
-        modes,
-        configOptionsEarlyUpdateCursor,
-      } = await Promise.race([startup(), timedOut]);
-      const acpId = sessionResponse.sessionId;
-      const session: ManagedSession = {
-        id: crypto.randomUUID(),
-        agentId,
+      agent = {
+        id: agentId,
         agentDefinition: def,
         cwd,
-        acpSessionId: acpId,
-        acpProtocol: driver.protocol,
+        process: childProcess,
         driver,
-        process,
+        capabilities: {},
+        authMethods: [],
+        sessions: new Map(),
+        earlyUpdates: new Map(),
+        closedSessionIds: new Set(),
+        closedSessionOrder: [],
+        closed: false,
+      };
+      const timedOut = new Promise<never>((_, reject) => {
+        startupTimer = setTimeout(
+          () => reject(new Error("ACP agent initialization timed out")),
+          this.startupTimeoutMs,
+        );
+      });
+      const initialized = await raceWithAbort(
+        Promise.race([driver.initialize(), timedOut]),
+        options.signal,
+      );
+      if (this.closing) throw new Error("Session manager is shutting down");
+      agent.capabilities = initialized.capabilities;
+      agent.authMethods = initialized.authMethods;
+      this.managedAgents.set(agentId, agent);
+      return this.agentSnapshot(agent);
+    } catch (error) {
+      if (driver) driver.closeConnection(error);
+      await stopAgent(childProcess.child, 1000);
+      throw new Error(
+        `Could not start ${agentId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    } finally {
+      if (startupTimer !== undefined) clearTimeout(startupTimer);
+    }
+  }
+
+  private receiveAgentUpdate(
+    agent: ManagedAgent,
+    update: NormalizedAcpUpdate,
+  ): void {
+    const session = agent.sessions.get(update.sessionId);
+    if (session) {
+      this.receiveUpdate(session, update);
+      return;
+    }
+    if (agent.closed || agent.closedSessionIds.has(update.sessionId)) return;
+    let updates = agent.earlyUpdates.get(update.sessionId);
+    if (!updates) {
+      if (agent.earlyUpdates.size >= 128) {
+        const oldest = agent.earlyUpdates.keys().next().value as
+          | string
+          | undefined;
+        if (oldest) agent.earlyUpdates.delete(oldest);
+      }
+      updates = [];
+      agent.earlyUpdates.set(update.sessionId, updates);
+    }
+    if (updates.length < 64) updates.push(update);
+  }
+
+  private closeAgent(agent: ManagedAgent, error?: unknown): Promise<void> {
+    if (agent.closePromise) return agent.closePromise;
+    agent.closed = true;
+    if (this.managedAgents.get(agent.id) === agent) {
+      this.managedAgents.delete(agent.id);
+    }
+    agent.earlyUpdates.clear();
+    agent.driver.closeConnection(error);
+    agent.closePromise = stopAgent(agent.process.child, 5000);
+    return agent.closePromise;
+  }
+
+  start(
+    agentId: string,
+    cwd = process.cwd(),
+    config: Record<string, string> = {},
+    modeId?: string,
+    permissionPolicy: PermissionPolicy = "read_only",
+    options: SessionLaunchOptions = {},
+  ): Promise<SessionSnapshot> {
+    return this.connectAgent(agentId, cwd, options).then(async () => {
+      const agent = this.managedAgents.get(agentId);
+      if (!agent || agent.closed)
+        throw new Error(`Agent is unavailable: ${agentId}`);
+      const session = await this.launchSession(
+        agent,
+        config,
+        modeId,
+        permissionPolicy,
+        undefined,
+        cwd,
+        options.signal,
+      );
+      return this.sessionSnapshot(session);
+    });
+  }
+
+  load(
+    agentId: string,
+    acpSessionId: string,
+    cwd: string,
+    permissionPolicy: PermissionPolicy = "read_only",
+    options: SessionLaunchOptions = {},
+  ): Promise<SessionSnapshot> {
+    return this.connectAgent(agentId, cwd, options).then(async () => {
+      const agent = this.managedAgents.get(agentId);
+      if (!agent || agent.closed)
+        throw new Error(`Agent is unavailable: ${agentId}`);
+      const session = await this.launchSession(
+        agent,
+        {},
+        undefined,
+        permissionPolicy,
+        acpSessionId,
+        cwd,
+        options.signal,
+      );
+      return this.sessionSnapshot(session);
+    });
+  }
+
+  private async launchSession(
+    agent: ManagedAgent,
+    config: Record<string, string>,
+    modeId: string | undefined,
+    permissionPolicy: PermissionPolicy,
+    loadSessionId?: string,
+    cwd = agent.cwd,
+    signal?: AbortSignal,
+  ): Promise<ManagedSession> {
+    if (this.closing || agent.closed) {
+      throw new Error("ACP agent is shutting down");
+    }
+    if (this.sessions.size >= this.maxSessions) {
+      throw new Error(`Active session limit (${this.maxSessions}) reached`);
+    }
+    let session: ManagedSession | undefined;
+    let startupTimer: ReturnType<typeof setTimeout> | undefined;
+    const startup = async () => {
+      const sessionResponse = loadSessionId
+        ? await agent.driver.resumeSession(loadSessionId, cwd)
+        : await agent.driver.newSession(cwd);
+      if (agent.closed || this.closing) {
+        throw new Error("ACP agent is shutting down");
+      }
+      const acpId = sessionResponse.sessionId;
+      session = {
+        id: crypto.randomUUID(),
+        agentId: agent.id,
+        agentDefinition: agent.agentDefinition,
+        agent,
+        cwd,
+        acpSessionId: acpId,
+        acpProtocol: agent.driver.protocol,
+        driver: agent.driver,
         promptActive: false,
-        capabilities: initialized.capabilities,
-        authMethods: initialized.authMethods,
-        configOptions,
-        modes,
+        capabilities: agent.capabilities,
+        authMethods: agent.authMethods,
+        configOptions: [...sessionResponse.configOptions],
+        modes: sessionResponse.modes,
         events: [],
         nextSequence: 1,
         droppedThrough: 0,
@@ -543,21 +635,87 @@ export class SessionManager {
         pendingPermissions: new Map(),
       };
       this.sessions.set(session.id, session);
-      for (const [index, update] of earlyUpdates.entries()) {
-        if (update.sessionId === acpId) {
-          this.receiveUpdate(
-            session,
-            update,
-            index >= configOptionsEarlyUpdateCursor,
+      agent.sessions.set(acpId, session);
+      agent.closedSessionIds.delete(acpId);
+      const earlyUpdates = agent.earlyUpdates.get(acpId) ?? [];
+      agent.earlyUpdates.delete(acpId);
+      for (const update of earlyUpdates) this.receiveUpdate(session, update);
+
+      const modelConfigIds = new Set(
+        session.configOptions.flatMap((option) => {
+          const id = typeof option.id === "string" ? option.id : undefined;
+          if (
+            id &&
+            (option.category === "model" ||
+              ((option.category === undefined || option.category === null) &&
+                id === agent.agentDefinition.modelConfigId))
+          )
+            return [id];
+          return [];
+        }),
+      );
+      const desired = Object.entries(config).sort(
+        ([a], [b]) =>
+          Number(modelConfigIds.has(b)) - Number(modelConfigIds.has(a)),
+      );
+      for (const [configId, value] of desired) {
+        let option = session.configOptions.find((item) => item.id === configId);
+        if (!option && session.configOptions.length) {
+          session.configOptions = await this.waitForConfigOptions(
+            session.id,
+            (options) => options.some((item) => item.id === configId),
+            DEFAULT_ASYNC_CONFIG_OPTION_TIMEOUT_MS,
           );
+          option = session.configOptions.find((item) => item.id === configId);
         }
+        if (!option && session.configOptions.length) {
+          throw new Error(`Unknown config option: ${configId}`);
+        }
+        if (option?.type === "select" && Array.isArray(option.options)) {
+          const values = (
+            option.options as Array<Record<string, unknown>>
+          ).flatMap((entry) =>
+            Array.isArray(entry.options)
+              ? (entry.options as Array<Record<string, unknown>>)
+              : [entry],
+          );
+          if (values.length && !values.some((entry) => entry.value === value)) {
+            throw new Error(
+              `Invalid value '${value}' for config option '${configId}'`,
+            );
+          }
+        }
+        session.configOptions = await this.setConfigOption(
+          session.id,
+          configId,
+          value,
+        );
       }
+      if (modeId) await this.setMode(session.id, modeId);
       return session;
+    };
+    const timedOut = new Promise<never>((_, reject) => {
+      startupTimer = setTimeout(() => {
+        const error = new Error(
+          `ACP session startup timed out after ${this.startupTimeoutMs}ms`,
+        );
+        void this.closeAgent(agent, error);
+        reject(error);
+      }, this.startupTimeoutMs);
+    });
+    try {
+      return await raceWithAbort(
+        Promise.race([startup(), timedOut]),
+        signal,
+        (error) => void this.closeAgent(agent, error),
+      );
     } catch (error) {
-      driver.closeConnection(error);
-      await stopAgent(process.child, 1000);
+      if (session && this.sessions.has(session.id)) {
+        if (agent.closed) this.removeSession(session);
+        else await this.close(session.id);
+      }
       throw new Error(
-        `Could not start ${agentId}: ${
+        `Could not start ${agent.id} session: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -629,6 +787,10 @@ export class SessionManager {
   private recordPromptActivity(session: ManagedSession): void {
     const prompt = session.prompt;
     if (!prompt || prompt.state !== "running") return;
+    this.signalPromptActivity(prompt);
+  }
+
+  private signalPromptActivity(prompt: PromptRecord): void {
     prompt.lastActivityAt = performance.now();
     prompt.activityVersion++;
     for (const waiter of [...prompt.activityWaiters]) waiter();
@@ -665,6 +827,7 @@ export class SessionManager {
       }
     } finally {
       session.promptActive = false;
+      this.signalPromptActivity(record);
       this.clearPermissionLease(session);
       this.cancelPendingPermissions(session);
     }
@@ -905,26 +1068,26 @@ export class SessionManager {
 
   async setMode(sessionId: string, modeId: string) {
     const session = this.requireSession(sessionId);
-    session.modes = await session.driver.setMode(
-      session.acpSessionId,
-      modeId,
-      session.configOptions,
-      session.modes,
-    );
+    session.modes =
+      (await session.driver.setMode(
+        session.acpSessionId,
+        modeId,
+        session.configOptions,
+        session.modes,
+      )) ?? session.modes;
     return structuredClone(session.modes);
   }
 
   private async requestPermission(
     params: AcpPermissionRequest,
-    policy: PermissionPolicy,
+    agent: ManagedAgent,
   ) {
-    const session = [...this.sessions.values()].find(
-      (item) => item.acpSessionId === params.sessionId,
-    );
+    const session = agent.sessions.get(params.sessionId);
     const options = params.options ?? [];
     const choose = (kind: string) =>
       options.find((option) => option.kind === kind);
     if (!session) return { outcome: { outcome: "cancelled" as const } };
+    const policy = session.permissionPolicy;
     this.recordPromptActivity(session);
     const requestId = crypto.randomUUID();
     const raw = {
@@ -1011,20 +1174,40 @@ export class SessionManager {
     return { permissionId, optionId, resolved: true };
   }
 
-  async close(id: string): Promise<void> {
-    const session = this.requireSession(id);
-    if (session.prompt?.state === "running") {
-      try {
-        await this.cancelPrompt(id, session.prompt.id);
-      } catch {
-        /* Closing the connection remains authoritative. */
-      }
-    }
+  private removeSession(session: ManagedSession): void {
     this.clearPermissionLease(session);
-    for (const waiter of [...(this.configOptionWaiters.get(id) ?? [])])
+    for (const waiter of [...(this.configOptionWaiters.get(session.id) ?? [])])
       waiter.finish(session.configOptions);
     this.cancelPendingPermissions(session);
-    this.sessions.delete(id);
+    this.sessions.delete(session.id);
+    session.agent.sessions.delete(session.acpSessionId);
+    session.agent.earlyUpdates.delete(session.acpSessionId);
+    session.agent.closedSessionIds.add(session.acpSessionId);
+    session.agent.closedSessionOrder.push(session.acpSessionId);
+    while (session.agent.closedSessionOrder.length > 256) {
+      const expired = session.agent.closedSessionOrder.shift();
+      if (expired) session.agent.closedSessionIds.delete(expired);
+    }
+  }
+
+  close(id: string): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session) return Promise.resolve();
+    if (session.closePromise) return session.closePromise;
+    session.closePromise = this.finishSessionClose(session);
+    return session.closePromise;
+  }
+
+  private async finishSessionClose(session: ManagedSession): Promise<void> {
+    if (session.prompt?.state === "running") {
+      try {
+        await this.cancelPrompt(session.id, session.prompt.id);
+      } catch {
+        /* Closing the ACP session remains authoritative. */
+      }
+    }
+    this.removeSession(session);
+    if (session.agent.closed) return;
     let closeTimer: ReturnType<typeof setTimeout> | undefined;
     const closeRequest = session.driver
       .closeSession(session.acpSessionId)
@@ -1036,13 +1219,16 @@ export class SessionManager {
       }),
     ]);
     if (closeTimer !== undefined) clearTimeout(closeTimer);
-    session.driver.closeConnection();
-    await stopAgent(session.process.child, 5000);
   }
 
   async closeAll(): Promise<void> {
+    if (this.closing) return;
+    this.closing = true;
+    await Promise.allSettled([...this.connectingAgents.values()]);
     await Promise.allSettled(
       [...this.sessions.keys()].map((id) => this.close(id)),
     );
+    const agents = [...this.managedAgents.values()];
+    await Promise.allSettled(agents.map((agent) => this.closeAgent(agent)));
   }
 }

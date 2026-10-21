@@ -1,12 +1,12 @@
 import type { AcpPromptBlock } from "../acp/protocol.ts";
 import type { OpenAiAgentConfig, OpenAiProxyConfig } from "./config.ts";
-import type { PromptHandle, SessionSnapshot } from "../sessions/manager.ts";
+import type { AgentSnapshot, PromptHandle } from "../sessions/manager.ts";
 import { SessionManager } from "../sessions/manager.ts";
 import { agentMap } from "./config.ts";
 
 interface Worker {
   config: OpenAiAgentConfig;
-  session: SessionSnapshot;
+  agent: AgentSnapshot;
   busy: number;
   failures: number;
   cooldownUntil: number;
@@ -78,7 +78,7 @@ function nestedValues(
 }
 
 function capabilitiesForWorker(worker: Worker): Record<string, unknown> {
-  const capabilities = worker.session.capabilities;
+  const capabilities = worker.agent.capabilities;
   if (!capabilities || typeof capabilities !== "object") return {};
   const record = capabilities as Record<string, unknown>;
   const prompt = record.promptCapabilities ?? record.prompt_capabilities;
@@ -124,16 +124,10 @@ export class OpenAiRuntime {
     const workers: Worker[] = [];
     try {
       for (const agent of config.agents) {
-        const session = await manager.start(
-          agent.id,
-          agent.cwd,
-          {},
-          undefined,
-          agent.permissionPolicy,
-        );
+        const managedAgent = await manager.connectAgent(agent.id, agent.cwd);
         workers.push({
           config: agent,
-          session,
+          agent: managedAgent,
           busy: 0,
           failures: 0,
           cooldownUntil: 0,
@@ -230,22 +224,29 @@ export class OpenAiRuntime {
       worker.busy++;
       let emitted = false;
       let prompt: PromptHandle | undefined;
+      let sessionId: string | undefined;
       try {
-        const upstreamModel = await this.selectModel(worker, model);
+        const session = await this.manager.start(
+          worker.config.id,
+          worker.config.cwd,
+          {},
+          undefined,
+          worker.config.permissionPolicy,
+          { signal },
+        );
+        sessionId = session.id;
+        const upstreamModel = await this.selectModel(worker, session.id, model);
         onSelected?.({ workerId: worker.config.id, upstreamModel });
-        prompt = this.manager.beginPrompt(worker.session.id, blocks);
+        prompt = this.manager.beginPrompt(session.id, blocks);
         let sent = "";
         let version = prompt.activityVersion;
 
         for (;;) {
           if (signal.aborted) {
-            await this.manager.cancelPrompt(worker.session.id, prompt.id);
+            await this.manager.cancelPrompt(session.id, prompt.id);
             throw abortReason(signal);
           }
-          const current = this.manager.getPromptHandle(
-            worker.session.id,
-            prompt.id,
-          );
+          const current = this.manager.getPromptHandle(session.id, prompt.id);
           const delta = current.text.startsWith(sent)
             ? current.text.slice(sent.length)
             : current.text;
@@ -257,7 +258,7 @@ export class OpenAiRuntime {
           version = current.activityVersion;
           if (current.state !== "running") break;
           const waiter = this.manager.waitForPromptActivity(
-            worker.session.id,
+            session.id,
             prompt.id,
             version,
           );
@@ -270,14 +271,11 @@ export class OpenAiRuntime {
           signal.removeEventListener("abort", onAbort);
           if (signal.aborted) {
             waiter.cancel();
-            await this.manager.cancelPrompt(worker.session.id, prompt.id);
+            await this.manager.cancelPrompt(session.id, prompt.id);
             throw abortReason(signal);
           }
         }
-        const completed = this.manager.getPromptHandle(
-          worker.session.id,
-          prompt.id,
-        );
+        const completed = this.manager.getPromptHandle(session.id, prompt.id);
         if (completed.state === "failed")
           throw new Error(completed.error ?? "ACP prompt failed");
         if (completed.state === "cancelled" && !signal.aborted) {
@@ -297,6 +295,9 @@ export class OpenAiRuntime {
         worker.failures++;
         worker.cooldownUntil = Date.now() + this.config.failureCooldownMs;
       } finally {
+        if (sessionId && this.manager.hasSession(sessionId)) {
+          await this.manager.close(sessionId).catch(() => undefined);
+        }
         worker.busy--;
         release();
       }
@@ -370,11 +371,12 @@ export class OpenAiRuntime {
 
   private async selectModel(
     worker: Worker,
+    sessionId: string,
     model: string,
   ): Promise<string | undefined> {
     const selection = worker.config.modelSelection;
     if (!selection) return undefined;
-    const session = this.manager.getSessionSnapshot(worker.session.id);
+    const session = this.manager.getSessionSnapshot(sessionId);
     const option = selection.configId
       ? session.configOptions.find((item) => item.id === selection.configId)
       : session.configOptions.find(
@@ -405,12 +407,8 @@ export class OpenAiRuntime {
         );
       return undefined;
     }
-    await this.manager.setConfigOption(
-      worker.session.id,
-      String(option.id),
-      resolved,
-    );
-    this.manager.recordModelSelection(worker.session.id, { model });
+    await this.manager.setConfigOption(sessionId, String(option.id), resolved);
+    this.manager.recordModelSelection(sessionId, { model });
     return resolved;
   }
 }

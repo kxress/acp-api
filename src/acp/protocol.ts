@@ -1,4 +1,4 @@
-import type { AgentDefinition } from "../agents/config.ts";
+import type { AgentDefinition } from "../agents/types.ts";
 import type { startAgent } from "../runtime/process.ts";
 
 export type AcpProtocol = "v1" | "v2";
@@ -28,6 +28,9 @@ export type AcpPermissionResponse = {
       };
 };
 
+/** ACP prompt blocks accepted from API adapters. */
+export type AcpPromptBlock = Record<string, unknown> & { type: string };
+
 export interface ProtocolSessionInfo {
   sessionId: string;
   capabilities: unknown;
@@ -47,7 +50,10 @@ export interface ProtocolDriver {
   initialize(): Promise<ProtocolInitialization>;
   newSession(cwd: string): Promise<ProtocolSessionInfo>;
   resumeSession(sessionId: string, cwd: string): Promise<ProtocolSessionInfo>;
-  prompt(sessionId: string, text: string): Promise<string | undefined>;
+  prompt(
+    sessionId: string,
+    prompt: string | AcpPromptBlock[],
+  ): Promise<string | undefined>;
   cancel(sessionId: string): Promise<void>;
   setConfigOption(
     sessionId: string,

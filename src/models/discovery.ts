@@ -1,4 +1,4 @@
-import type { AgentDefinition } from "../agents/config.ts";
+import type { AgentDefinition } from "../agents/types.ts";
 
 export interface DiscoveredModel {
   id: string;

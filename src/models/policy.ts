@@ -509,11 +509,10 @@ export function resolveModelSelection(
         );
       }
       const liveValues = new Set(optionValues(option));
-      const available = THINKING_EFFORTS.filter(
-        (effort) =>
-          mapping.values[effort] !== undefined &&
-          liveValues.has(mapping.values[effort]!),
-      );
+      const available = THINKING_EFFORTS.filter((effort) => {
+        const mappedValue = mapping.values[effort];
+        return mappedValue !== undefined && liveValues.has(mappedValue);
+      });
       const sizeCap = modelSize
         ? policy.modelSizes?.[modelSize]?.maxThinkingEffort
         : undefined;

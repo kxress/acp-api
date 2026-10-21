@@ -10,7 +10,7 @@ const outputDirectory = join(projectRoot, "dist");
 await nodeFs.mkdir(outputDirectory, { recursive: true });
 await build({
   entryPoints: [join(projectRoot, "src", "main.ts")],
-  outfile: join(outputDirectory, "acp-mcp.mjs"),
+  outfile: join(outputDirectory, "acp-api.mjs"),
   bundle: true,
   platform: "node",
   format: "esm",

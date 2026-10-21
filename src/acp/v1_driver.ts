@@ -3,11 +3,12 @@ import {
   type ClientConnection,
   ndJsonStream,
 } from "@agentclientprotocol/sdk";
-import type { AgentDefinition } from "../agents/config.ts";
+import type { AgentDefinition } from "../agents/types.ts";
 import type { startAgent } from "../runtime/process.ts";
 import { interceptSessionUpdates } from "./session_update_stream.ts";
 import type {
   AcpPermissionRequest,
+  AcpPromptBlock,
   NormalizedAcpUpdate,
   ProtocolCallbacks,
   ProtocolDriver,
@@ -19,7 +20,7 @@ export class V1Driver implements ProtocolDriver {
   readonly definition: AgentDefinition;
   readonly process: Awaited<ReturnType<typeof startAgent>>;
   readonly protocol = "v1" as const;
-  private readonly app = client({ name: "acp-mcp" });
+  private readonly app = client({ name: "acp-api" });
   private readonly connection: ClientConnection;
   private initialized?: ProtocolInitialization;
 
@@ -99,11 +100,16 @@ export class V1Driver implements ProtocolDriver {
     };
   }
 
-  async prompt(sessionId: string, text: string): Promise<string | undefined> {
+  async prompt(
+    sessionId: string,
+    input: string | AcpPromptBlock[],
+  ): Promise<string | undefined> {
+    const prompt =
+      typeof input === "string" ? [{ type: "text", text: input }] : input;
     const response = await this.connection.agent.request("session/prompt", {
       sessionId,
-      prompt: [{ type: "text", text }],
-    });
+      prompt,
+    } as never);
     return response.stopReason;
   }
 

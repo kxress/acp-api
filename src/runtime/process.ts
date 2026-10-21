@@ -1,7 +1,7 @@
 import process from "node:process";
 import { ProcessCommand, type SpawnedProcess } from "#proc";
 import * as nodeFs from "#fs";
-import type { AgentDefinition } from "../agents/config.ts";
+import type { AgentDefinition } from "../agents/types.ts";
 
 async function isFile(path: string): Promise<boolean> {
   try {
@@ -122,12 +122,12 @@ export async function startAgent(definition: AgentDefinition, cwd: string) {
     process.platform === "win32" && /\.(cmd|bat)$/i.test(resolved);
   const command = isBatch ? (process.env["COMSPEC"] ?? "cmd.exe") : resolved;
   const args = isBatch
-    ? ["/d", "/c", "%ACPMCP_CONFIGURED_COMMAND%"]
+    ? ["/d", "/c", "%ACPAPI_CONFIGURED_COMMAND%"]
     : definition.args;
   const env = isBatch
     ? {
         ...definition.env,
-        ACPMCP_CONFIGURED_COMMAND: [resolved, ...definition.args]
+        ACPAPI_CONFIGURED_COMMAND: [resolved, ...definition.args]
           .map(quoteCmdStaticArgument)
           .join(" "),
       }

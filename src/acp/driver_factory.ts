@@ -1,4 +1,4 @@
-import type { AgentDefinition } from "../agents/config.ts";
+import type { AgentDefinition } from "../agents/types.ts";
 import type { startAgent } from "../runtime/process.ts";
 import type {
   AcpProtocol,

@@ -10,22 +10,6 @@
       "attribution": "Copyright 2025 Zed Industries, Inc. and contributors. The published npm package contains no NOTICE file."
     },
     {
-      "name": "@modelcontextprotocol/server",
-      "version": "2.3.1",
-      "license": "Apache-2.0",
-      "source": "https://github.com/modelcontextprotocol/typescript-sdk",
-      "licenseFiles": ["licenses/Apache-2.0.txt", "licenses/MCP-SDK-MIT.txt"],
-      "attribution": "The package LICENSE identifies the MCP TypeScript SDK project as transitioning to Apache-2.0 and retains an MIT notice for contributions not relicensed. No separate NOTICE file is present in the published package."
-    },
-    {
-      "name": "@modelcontextprotocol/core",
-      "version": "2.3.1",
-      "license": "Apache-2.0",
-      "source": "https://github.com/modelcontextprotocol/typescript-sdk",
-      "licenseFiles": ["licenses/Apache-2.0.txt", "licenses/MCP-SDK-MIT.txt"],
-      "attribution": "The package LICENSE identifies the MCP TypeScript SDK project as transitioning to Apache-2.0 and retains an MIT notice for contributions not relicensed. No separate NOTICE file is present in the published package."
-    },
-    {
       "name": "zod",
       "version": "4.6.5",
       "license": "MIT",

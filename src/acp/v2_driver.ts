@@ -3,12 +3,13 @@ import {
   type ClientConnection,
   ndJsonStream,
 } from "@agentclientprotocol/sdk/experimental/v2";
-import type { AgentDefinition } from "../agents/config.ts";
+import type { AgentDefinition } from "../agents/types.ts";
 import type { startAgent } from "../runtime/process.ts";
 import { interceptV2SessionUpdates } from "./session_update_stream.ts";
 import { VERSION } from "../version.ts";
 import type {
   AcpPermissionRequest,
+  AcpPromptBlock,
   NormalizedAcpUpdate,
   ProtocolCallbacks,
   ProtocolDriver,
@@ -25,7 +26,7 @@ export class V2Driver implements ProtocolDriver {
   readonly definition: AgentDefinition;
   readonly process: Awaited<ReturnType<typeof startAgent>>;
   readonly protocol = "v2" as const;
-  private readonly app = client({ name: "acp-mcp" });
+  private readonly app = client({ name: "acp-api" });
   private readonly connection: ClientConnection;
   private readonly activeTurns = new Map<string, ActiveTurn>();
   private initialized?: ProtocolInitialization;
@@ -69,7 +70,7 @@ export class V2Driver implements ProtocolDriver {
     try {
       response = await this.connection.agent.request("initialize", {
         protocolVersion: 2,
-        info: { name: "acp-mcp", version: VERSION },
+        info: { name: "acp-api", version: VERSION },
         capabilities: {},
       });
     } catch (error) {
@@ -130,7 +131,10 @@ export class V2Driver implements ProtocolDriver {
     };
   }
 
-  async prompt(sessionId: string, text: string): Promise<string | undefined> {
+  async prompt(
+    sessionId: string,
+    input: string | AcpPromptBlock[],
+  ): Promise<string | undefined> {
     if (this.activeTurns.has(sessionId)) {
       throw new Error("A v2 prompt turn is already active for this session");
     }
@@ -143,8 +147,9 @@ export class V2Driver implements ProtocolDriver {
     try {
       await this.connection.agent.request("session/prompt", {
         sessionId,
-        prompt: [{ type: "text", text }],
-      });
+        prompt:
+          typeof input === "string" ? [{ type: "text", text: input }] : input,
+      } as never);
       return await stopped;
     } catch (error) {
       this.activeTurns.delete(sessionId);

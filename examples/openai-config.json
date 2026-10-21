@@ -1,0 +1,20 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 11435,
+    "api_key": "${ACP_OPENAI_PROXY_API_KEY:-local-development-token}",
+    "routing_strategy": "sticky_failover",
+    "max_retries": 1,
+    "max_sessions": 32
+  },
+  "agents": [
+    {
+      "name": "opencode",
+      "instance_id": "opencode-a",
+      "command": "opencode",
+      "args": ["acp"],
+      "models": ["opencode"],
+      "permission": "deny"
+    }
+  ]
+}

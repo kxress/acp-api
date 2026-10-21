@@ -1,25 +1,14 @@
-acp-mcp bundles the runtime dependencies listed below in its release packages.
+acp-api bundles the runtime dependencies listed below when building the
+standalone Node package.
 
-The original acp-mcp source is licensed under WTFPL; this does not change the
-separate licenses of third-party code included in the binaries.
+The original acp-api source is licensed under WTFPL. Third-party licenses remain
+separate.
 
 @agentclientprotocol/sdk 1.7.0
   License: Apache-2.0
   Source: https://github.com/agentclientprotocol/typescript-sdk/tree/605f3e0a250d1f0444b13b7c2a3b3d21b5c4b5ca
   Copyright 2025 Zed Industries, Inc. and contributors. The published npm package contains no NOTICE file.
   License text: licenses/Apache-2.0.txt
-
-@modelcontextprotocol/server 2.3.1
-  License: Apache-2.0
-  Source: https://github.com/modelcontextprotocol/typescript-sdk
-  The package LICENSE identifies the MCP TypeScript SDK project as transitioning to Apache-2.0 and retains an MIT notice for contributions not relicensed. No separate NOTICE file is present in the published package.
-  License text: licenses/Apache-2.0.txt and licenses/MCP-SDK-MIT.txt
-
-@modelcontextprotocol/core 2.3.1
-  License: Apache-2.0
-  Source: https://github.com/modelcontextprotocol/typescript-sdk
-  The package LICENSE identifies the MCP TypeScript SDK project as transitioning to Apache-2.0 and retains an MIT notice for contributions not relicensed. No separate NOTICE file is present in the published package.
-  License text: licenses/Apache-2.0.txt and licenses/MCP-SDK-MIT.txt
 
 zod 4.6.5
   License: MIT

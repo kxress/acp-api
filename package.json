@@ -1,6 +1,6 @@
 {
-  "name": "acp-mcp",
-  "version": "0.2.5",
+  "name": "acp-api",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "imports": {
@@ -11,25 +11,18 @@
     "node": ">=24.12.0"
   },
   "bin": {
-    "acp-mcp": "dist/acp-mcp.mjs"
+    "acp-api": "dist/acp-api.mjs"
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "node --test",
-    "lint": "biome lint .",
-    "format": "biome format --write .",
-    "format:check": "biome format .",
+    "lint": "biome lint src scripts",
+    "format": "biome format --write src scripts README.md docs examples",
+    "format:check": "biome format src scripts README.md docs examples",
     "build": "node scripts/build.ts",
-    "build:native": "node scripts/build_native.ts",
-    "compat": "node scripts/compat.ts",
-    "release": "node scripts/release.ts",
-    "install-release": "node scripts/release.ts install",
-    "provision:antigravity-agy": "node scripts/provision_antigravity_agy.ts",
-    "verify-public-release": "node scripts/verify_public_release.ts"
+    "start": "node dist/acp-api.mjs --config config.json"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.7.0",
-    "@modelcontextprotocol/server": "2.3.1",
     "zod": "4.6.5"
   },
   "devDependencies": {

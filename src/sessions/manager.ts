@@ -1,5 +1,5 @@
 import process from "node:process";
-import type { AgentDefinition, AgentMap } from "../agents/config.ts";
+import type { AgentDefinition, AgentMap } from "../agents/types.ts";
 import type {
   AgentModelPolicy,
   ModelSize,
@@ -9,6 +9,7 @@ import { createProtocolDriver } from "../acp/driver_factory.ts";
 import type {
   AcpPermissionRequest,
   AcpProtocol,
+  AcpPromptBlock,
   NormalizedAcpUpdate,
   ProtocolDriver,
 } from "../acp/protocol.ts";
@@ -565,7 +566,10 @@ export class SessionManager {
     }
   }
 
-  beginPrompt(sessionId: string, text: string): PromptHandle {
+  beginPrompt(
+    sessionId: string,
+    prompt: string | AcpPromptBlock[],
+  ): PromptHandle {
     const session = this.requireSession(sessionId);
     if (session.promptActive) {
       throw new Error("A prompt is already active for this session");
@@ -583,7 +587,7 @@ export class SessionManager {
       done: Promise.resolve(),
     };
     session.prompt = record;
-    record.done = this.consumePrompt(session, record, text);
+    record.done = this.consumePrompt(session, record, prompt);
     return this.promptHandle(record);
   }
 
@@ -633,12 +637,12 @@ export class SessionManager {
   private async consumePrompt(
     session: ManagedSession,
     record: PromptRecord,
-    text: string,
+    prompt: string | AcpPromptBlock[],
   ): Promise<void> {
     try {
       record.stopReason = await session.driver.prompt(
         session.acpSessionId,
-        text,
+        prompt,
       );
       if (record.state === "running") {
         record.state =
@@ -855,7 +859,7 @@ export class SessionManager {
 
   async prompt(
     sessionId: string,
-    text: string,
+    text: string | AcpPromptBlock[],
   ): Promise<{ stopReason?: string; text: string; promptId?: string }> {
     const prompt = this.beginPrompt(sessionId, text);
     await prompt.done;

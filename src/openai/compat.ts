@@ -326,10 +326,10 @@ function normalizeTools(body: Record<string, unknown>): ClientTool[] {
         ? item.function
         : isRecord(item) && item.type === undefined
           ? item
-          : isRecord(item) &&
-              item.type === "function" &&
-              isRecord(item.function)
-            ? item.function
+          : isRecord(item) && item.type === "function"
+            ? isRecord(item.function)
+              ? item.function
+              : item
             : undefined;
     if (!fn) {
       throw new OpenAiRequestError(`tools[${index}] must be a function tool`);
@@ -531,8 +531,12 @@ export function buildCompletionPrompt(
 export function buildResponsesPrompt(
   body: Record<string, unknown>,
   capabilities: unknown = {},
-): AcpPromptBlock[] {
+): { blocks: AcpPromptBlock[]; toolContext: ClientToolContext } {
   const blocks: AcpPromptBlock[] = [];
+  const toolContext = clientToolContext(body);
+  if (toolContext.instruction) {
+    blocks.push({ type: "text", text: toolContext.instruction });
+  }
   if (typeof body.instructions === "string" && body.instructions.trim()) {
     blocks.push({
       type: "text",
@@ -593,7 +597,7 @@ export function buildResponsesPrompt(
     throw new OpenAiRequestError("input must be a string or an array");
   }
   if (!blocks.length) throw new OpenAiRequestError("input must not be empty");
-  return blocks;
+  return { blocks, toolContext };
 }
 
 export function estimateTokens(text: string): number {
@@ -702,6 +706,7 @@ export function responsesResponse(
   blocks: AcpPromptBlock[],
   text: string,
   stopReason?: string,
+  toolCalls: ReturnType<typeof extractClientToolCalls> = [],
 ) {
   const incomplete = [
     "max_tokens",
@@ -711,22 +716,33 @@ export function responsesResponse(
   ].includes(stopReason ?? "");
   const id = makeId("resp");
   const outputId = makeId("msg");
+  const output = toolCalls.length
+    ? toolCalls.map((call) => ({
+        id: makeId("fc"),
+        type: "function_call",
+        status: "completed",
+        call_id: call.id,
+        name: call.function.name,
+        arguments: call.function.arguments,
+      }))
+    : [
+        {
+          id: outputId,
+          type: "message",
+          status: "completed",
+          role: "assistant",
+          content: [{ type: "output_text", text, annotations: [] }],
+        },
+      ];
+  const resultText = toolCalls.length ? JSON.stringify(toolCalls) : text;
   return {
     id,
     object: "response",
     created_at: Math.floor(Date.now() / 1000),
     status: incomplete ? "incomplete" : "completed",
     model,
-    output: [
-      {
-        id: outputId,
-        type: "message",
-        status: "completed",
-        role: "assistant",
-        content: [{ type: "output_text", text, annotations: [] }],
-      },
-    ],
-    output_text: text,
+    output,
+    output_text: toolCalls.length ? "" : text,
     error: null,
     incomplete_details: incomplete
       ? {
@@ -740,9 +756,9 @@ export function responsesResponse(
       : null,
     usage: {
       input_tokens: estimateTokens(promptTextForUsage(blocks)),
-      output_tokens: estimateTokens(text),
+      output_tokens: estimateTokens(resultText),
       total_tokens:
-        estimateTokens(promptTextForUsage(blocks)) + estimateTokens(text),
+        estimateTokens(promptTextForUsage(blocks)) + estimateTokens(resultText),
     },
     metadata: {},
   };

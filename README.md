@@ -1,7 +1,7 @@
 # acp-api
 
-`acp-api` runs configured Agent Client Protocol (ACP) agents behind an
-OpenAI-compatible HTTP API. It starts ACP agents as local stdio subprocesses,
+`acp-api` runs configured Agent Client Protocol (ACP) agents behind OpenAI- and
+Anthropic-compatible HTTP APIs. It starts ACP agents as local stdio subprocesses,
 reuses their long-lived sessions, and translates HTTP requests into ACP prompts.
 The service does not call model providers directly.
 
@@ -22,16 +22,19 @@ node .\dist\acp-api.mjs --config .\openai-config.json
 ```
 
 The service listens on `127.0.0.1:11435` by default. Set
-`ACP_OPENAI_PROXY_API_KEY` or `server.api_key` to require bearer authentication.
-An API key is required when the server binds to a non-loopback host.
+`ACP_API_KEY` or `server.api_key` to require authentication. The legacy
+`ACP_OPENAI_PROXY_API_KEY` variable is also accepted. An API key is required
+when the server binds to a non-loopback host.
 
-The OpenAI-compatible endpoints are:
+The API endpoints are:
 
 - `GET /health` and `GET /healthz`
 - `GET /v1/models` and `GET /v1/models/{model}`
 - `POST /v1/chat/completions`
 - `POST /v1/completions`
 - `POST /v1/responses`
+- `POST /v1/messages`
+- `POST /v1/messages/count_tokens`
 
 Generation endpoints return JSON or server-sent events when `stream` is true.
 Response headers identify the selected ACP runtime and model.
@@ -55,11 +58,12 @@ intended only for trusted agents and workspaces.
 ## Input support
 
 Chat Completions, Completions, and Responses accept text input. Chat function
-tools are returned to the client as `tool_calls`; the proxy does not execute
-them. Inline images, audio, and embedded resources are sent only when the ACP
-agent advertises the corresponding prompt capability. Remote HTTP and HTTPS
-resource URLs are forwarded without being downloaded. OpenAI-hosted `file_id`
-attachments are not supported by local ACP agents.
+OpenAI function tools and Anthropic tools are returned to the client as tool
+calls; the proxy does not execute them. The client executes each tool and sends
+the result in its next request. Inline images, audio, and embedded resources are
+sent only when the ACP agent advertises the corresponding prompt capability.
+Remote HTTP and HTTPS resource URLs are forwarded without being downloaded.
+OpenAI-hosted `file_id` attachments are not supported by local ACP agents.
 
 See [the HTTP API guide](docs/openai-api.md) for the configuration fields and
 request details.
@@ -69,5 +73,6 @@ request details.
 ```powershell
 npm run check
 npm run lint
+npm test
 npm run build
 ```

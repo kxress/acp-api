@@ -1,8 +1,8 @@
-# OpenAI-compatible HTTP API
+# OpenAI- and Anthropic-compatible HTTP APIs
 
 This mode launches configured ACP agents and exposes an OpenAI-compatible HTTP
-API. Requests are translated into ACP session prompts; the proxy does not call
-OpenAI or another model provider directly.
+APIs. Requests are translated into ACP session prompts; the proxy does not call
+OpenAI, Anthropic, or another model provider directly.
 
 ## Start
 
@@ -14,10 +14,13 @@ acp-api --config .\openai-config.json
 ```
 
 The default listener is `127.0.0.1:11435`. Set `server.api_key` or the
-`ACP_OPENAI_PROXY_API_KEY` environment variable to require bearer authentication.
-A key is required when binding to a non-loopback address.
+`ACP_API_KEY` environment variable to require authentication. The legacy
+`ACP_OPENAI_PROXY_API_KEY` variable is also accepted. Use the bearer header for
+OpenAI clients and `x-api-key` for Anthropic clients. A key is required when
+binding to a non-loopback address.
 
-`ACP_OPENAI_PROXY_API_KEY` overrides `server.api_key`. Agent environment values
+`ACP_API_KEY` (or legacy `ACP_OPENAI_PROXY_API_KEY`) overrides `server.api_key`.
+Agent environment values
 and the server key support `${NAME}`, `${NAME:-fallback}`, `$NAME`,
 `{var:NAME}`, `{env:NAME}`, and `{file:/absolute/path}` expansion. Secret file
 contents are inserted literally and one trailing newline is removed.
@@ -29,6 +32,14 @@ contents are inserted literally and one trailing newline is removed.
 - `POST /v1/chat/completions`
 - `POST /v1/completions`
 - `POST /v1/responses`
+- `POST /v1/messages`
+- `POST /v1/messages/count_tokens`
+
+Anthropic clients should send the `anthropic-version` header. With that header,
+`GET /v1/models` uses Anthropic's model-list response shape.
+Messages requests require `max_tokens`; it is passed to the ACP agent as a
+response-length instruction because ACP does not define a provider-neutral token
+limit parameter. Reported usage and `count_tokens` values are local estimates.
 
 Generation endpoints accept JSON and support streaming with server-sent events.
 Responses include `X-Request-ID`, `X-ACP-Agent`, and `X-ACP-Model` headers. When
@@ -73,9 +84,13 @@ should only be used with trusted agents and workspaces.
 
 ## Request notes
 
-Chat requests accept one choice (`n` omitted or `1`). OpenAI function tools are
-returned as `tool_calls`; the proxy does not execute them. Inline image and audio
-data and remote resource URLs are passed through only when the ACP runtime
-advertises the matching prompt capability. Remote URLs are forwarded to the
-agent and are not downloaded by the proxy. OpenAI-hosted `file_id` attachments
-are not supported because a local ACP runtime cannot dereference them.
+Chat requests accept one choice (`n` omitted or `1`). Client-supplied OpenAI and
+Anthropic tools are described to the ACP agent and returned to the client as
+tool calls; the client executes them and sends tool results in its next request.
+The proxy does not run the client's functions. Anthropic's `count_tokens`
+endpoint uses a local estimate and makes no ACP generation request. Inline image
+and audio data and remote resource URLs are passed through only when the ACP
+runtime advertises the matching prompt capability. Remote URLs are forwarded to
+the agent and are not downloaded by the proxy. OpenAI-hosted `file_id`
+attachments are not supported because a local ACP runtime cannot dereference
+them.

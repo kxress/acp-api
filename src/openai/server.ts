@@ -7,6 +7,12 @@ import {
 import { timingSafeEqual } from "node:crypto";
 import process from "node:process";
 import type { AcpPromptBlock } from "../acp/protocol.ts";
+import {
+  AnthropicRequestError,
+  anthropicError,
+  anthropicResponse,
+  buildAnthropicPrompt,
+} from "../anthropic.ts";
 import type { OpenAiProxyConfig } from "./config.ts";
 import {
   buildChatPrompt,
@@ -19,6 +25,8 @@ import {
   makeId,
   OpenAiRequestError,
   responsesResponse,
+  estimateTokens,
+  promptTextForUsage,
 } from "./compat.ts";
 import { OpenAiRuntime } from "./runtime.ts";
 
@@ -36,33 +44,49 @@ function errorBody(message: string, type: string, code: string | null = null) {
   return { error: { message, type, param: null, code } };
 }
 
-function asError(error: unknown): {
+function isAnthropicRequest(req: IncomingMessage): boolean {
+  return (
+    req.url?.startsWith("/v1/messages") === true ||
+    typeof req.headers["anthropic-version"] === "string"
+  );
+}
+
+function asError(
+  error: unknown,
+  anthropic = false,
+): {
   status: number;
-  body: ReturnType<typeof errorBody>;
+  body: ReturnType<typeof errorBody> | Record<string, unknown>;
 } {
-  if (error instanceof Error && error.name === "TimeoutError") {
-    return {
+  let failure: { status: number; body: ReturnType<typeof errorBody> };
+  if (error instanceof AnthropicRequestError) {
+    failure = {
+      status: error.status,
+      body: errorBody(error.message, error.type),
+    };
+  } else if (error instanceof Error && error.name === "TimeoutError") {
+    failure = {
       status: 504,
       body: errorBody(error.message, "server_error", "request_timeout"),
     };
-  }
-  if (error instanceof OpenAiRequestError) {
-    return {
+  } else if (error instanceof OpenAiRequestError) {
+    failure = {
       status: error.status,
       body: errorBody(error.message, error.type, error.code),
     };
-  }
-  if (error instanceof SyntaxError) {
-    return {
+  } else if (error instanceof SyntaxError) {
+    failure = {
       status: 400,
       body: errorBody(
         "request body is not valid JSON",
         "invalid_request_error",
       ),
     };
-  }
-  if (error instanceof Error && error.message.startsWith("Model not found:")) {
-    return {
+  } else if (
+    error instanceof Error &&
+    error.message.startsWith("Model not found:")
+  ) {
+    failure = {
       status: 404,
       body: errorBody(
         error.message,
@@ -70,15 +94,27 @@ function asError(error: unknown): {
         "model_not_found",
       ),
     };
+  } else {
+    failure = {
+      status: 502,
+      body: errorBody(
+        error instanceof Error ? error.message : String(error),
+        "acp_error",
+        "upstream_error",
+      ),
+    };
   }
-  return {
-    status: 502,
-    body: errorBody(
-      error instanceof Error ? error.message : String(error),
-      "acp_error",
-      "upstream_error",
-    ),
-  };
+  if (!anthropic) return failure;
+  const message = failure.body.error.message;
+  const type =
+    failure.status === 401
+      ? "authentication_error"
+      : failure.status === 404
+        ? "not_found_error"
+        : failure.status >= 500
+          ? "api_error"
+          : "invalid_request_error";
+  return { status: failure.status, body: anthropicError(message, type) };
 }
 
 function bearerAuthorized(req: IncomingMessage, apiKey: string): boolean {
@@ -90,6 +126,24 @@ function bearerAuthorized(req: IncomingMessage, apiKey: string): boolean {
   return (
     received.length === expected.length && timingSafeEqual(received, expected)
   );
+}
+
+function authorized(
+  req: IncomingMessage,
+  apiKey: string,
+  anthropic: boolean,
+): boolean {
+  if (!apiKey) return true;
+  if (!anthropic) return bearerAuthorized(req, apiKey);
+  const value = req.headers["x-api-key"];
+  if (typeof value === "string") {
+    const received = Buffer.from(value);
+    const expected = Buffer.from(apiKey);
+    return (
+      received.length === expected.length && timingSafeEqual(received, expected)
+    );
+  }
+  return bearerAuthorized(req, apiKey);
 }
 
 async function readJson(
@@ -152,10 +206,15 @@ function affinityKey(
 ): string {
   const routingHeader = req.headers["x-acp-routing-key"];
   if (typeof routingHeader === "string" && routingHeader) return routingHeader;
+  const metadata =
+    body.metadata && typeof body.metadata === "object"
+      ? (body.metadata as Record<string, unknown>)
+      : undefined;
   const key =
     body.conversation_id ??
     body.conversationId ??
     body.user ??
+    metadata?.user_id ??
     body.routing_key ??
     body.routingKey;
   if (typeof key === "string" && key) return key;
@@ -449,10 +508,8 @@ async function responses(
   requestId: string,
 ): Promise<void> {
   const model = ensureModel(runtime, body);
-  const blocks = buildResponsesPrompt(
-    body,
-    runtime.capabilitiesForModel(model),
-  );
+  const built = buildResponsesPrompt(body, runtime.capabilitiesForModel(model));
+  const { blocks } = built;
   if (!runtime.supportsInput(model, blocks)) {
     throw new OpenAiRequestError(
       `No ACP runtime backing model '${model}' advertises the requested input capabilities`,
@@ -529,7 +586,7 @@ async function responses(
       (value) => {
         selected = value;
       },
-      streamed
+      streamed && !built.toolContext.instruction
         ? async (delta) => {
             start();
             fullText += delta;
@@ -551,6 +608,7 @@ async function responses(
       workerId: result.workerId,
       upstreamModel: result.upstreamModel,
     };
+    const toolCalls = extractClientToolCalls(result.text, body);
     if (!streamed) {
       setRequestHeaders(res, requestId, model, selected);
       const response = responsesResponse(
@@ -558,10 +616,101 @@ async function responses(
         blocks,
         result.text,
         result.stopReason,
+        toolCalls,
       );
       response.id = responseId;
-      response.output[0].id = itemId;
+      if (response.output[0]?.type === "message") {
+        response.output[0].id = itemId;
+      }
       json(res, 200, response);
+      return;
+    }
+    if (toolCalls.length) {
+      setRequestHeaders(res, requestId, model, selected);
+      sseHeaders(res);
+      const response = responsesResponse(
+        model,
+        blocks,
+        result.text,
+        result.stopReason,
+        toolCalls,
+      );
+      response.id = responseId;
+      const base = {
+        ...response,
+        status: "in_progress",
+        output: [],
+        usage: null,
+      };
+      sendSse(
+        res,
+        { type: "response.created", response: base },
+        "response.created",
+      );
+      sendSse(
+        res,
+        { type: "response.in_progress", response: base },
+        "response.in_progress",
+      );
+      for (const [index, item] of response.output.entries()) {
+        const functionCall = item as {
+          id: string;
+          type: string;
+          status: string;
+          call_id: string;
+          name: string;
+          arguments: string;
+        };
+        const inProgress = {
+          ...functionCall,
+          status: "in_progress",
+          arguments: "",
+        };
+        sendSse(
+          res,
+          {
+            type: "response.output_item.added",
+            output_index: index,
+            item: inProgress,
+          },
+          "response.output_item.added",
+        );
+        sendSse(
+          res,
+          {
+            type: "response.function_call_arguments.delta",
+            item_id: functionCall.id,
+            output_index: index,
+            delta: functionCall.arguments,
+          },
+          "response.function_call_arguments.delta",
+        );
+        sendSse(
+          res,
+          {
+            type: "response.function_call_arguments.done",
+            item_id: functionCall.id,
+            output_index: index,
+            arguments: functionCall.arguments,
+          },
+          "response.function_call_arguments.done",
+        );
+        sendSse(
+          res,
+          {
+            type: "response.output_item.done",
+            output_index: index,
+            item: functionCall,
+          },
+          "response.output_item.done",
+        );
+      }
+      sendSse(
+        res,
+        { type: "response.completed", response },
+        "response.completed",
+      );
+      res.end();
       return;
     }
     start();
@@ -620,6 +769,197 @@ async function responses(
   }
 }
 
+async function anthropicMessages(
+  req: IncomingMessage,
+  res: ServerResponse,
+  body: Record<string, unknown>,
+  runtime: OpenAiRuntime,
+  config: OpenAiProxyConfig,
+  requestId: string,
+): Promise<void> {
+  const model = ensureModel(runtime, body);
+  const built = buildAnthropicPrompt(body, runtime.capabilitiesForModel(model));
+  if (!runtime.supportsInput(model, built.blocks)) {
+    throw new AnthropicRequestError(
+      `No ACP runtime backing model '${model}' advertises the requested input capabilities`,
+      400,
+    );
+  }
+  const abort = requestController(req, res, config.requestTimeoutMs);
+  let selected: { workerId: string; upstreamModel?: string } | undefined;
+  const streamed = body.stream === true;
+  const streamText =
+    streamed &&
+    !built.toolContext.instruction &&
+    !Array.isArray(body.stop_sequences);
+  const messageId = makeId("msg");
+  const inputTokens = estimateTokens(promptTextForUsage(built.blocks));
+  let streamStarted = false;
+  let textBlockStarted = false;
+  const startStream = () => {
+    if (streamStarted) return;
+    if (selected) setRequestHeaders(res, requestId, model, selected);
+    sseHeaders(res);
+    streamStarted = true;
+    sendSse(
+      res,
+      {
+        type: "message_start",
+        message: {
+          id: messageId,
+          type: "message",
+          role: "assistant",
+          model,
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: inputTokens, output_tokens: 0 },
+        },
+      },
+      "message_start",
+    );
+  };
+  try {
+    const result = await runtime.generate(
+      model,
+      built.blocks,
+      affinityKey(req, body, built.blocks),
+      abort.controller.signal,
+      (value) => {
+        selected = value;
+      },
+      streamText
+        ? (delta) => {
+            startStream();
+            if (!textBlockStarted) {
+              sendSse(
+                res,
+                {
+                  type: "content_block_start",
+                  index: 0,
+                  content_block: { type: "text", text: "" },
+                },
+                "content_block_start",
+              );
+              textBlockStarted = true;
+            }
+            sendSse(
+              res,
+              {
+                type: "content_block_delta",
+                index: 0,
+                delta: { type: "text_delta", text: delta },
+              },
+              "content_block_delta",
+            );
+          }
+        : undefined,
+    );
+    selected = {
+      workerId: result.workerId,
+      upstreamModel: result.upstreamModel,
+    };
+    const response = anthropicResponse(
+      model,
+      built.blocks,
+      result.text,
+      result.stopReason,
+      body,
+    );
+    response.id = messageId;
+    if (!res.headersSent) setRequestHeaders(res, requestId, model, selected);
+    if (!streamed) {
+      json(res, 200, response);
+      return;
+    }
+
+    startStream();
+    if (textBlockStarted) {
+      sendSse(
+        res,
+        { type: "content_block_stop", index: 0 },
+        "content_block_stop",
+      );
+    } else {
+      for (const [index, block] of response.content.entries()) {
+        const initial =
+          block.type === "tool_use"
+            ? { ...block, input: {} }
+            : { type: "text", text: "" };
+        sendSse(
+          res,
+          {
+            type: "content_block_start",
+            index,
+            content_block: initial,
+          },
+          "content_block_start",
+        );
+        if (block.type === "tool_use") {
+          sendSse(
+            res,
+            {
+              type: "content_block_delta",
+              index,
+              delta: {
+                type: "input_json_delta",
+                partial_json: JSON.stringify(block.input),
+              },
+            },
+            "content_block_delta",
+          );
+        } else {
+          sendSse(
+            res,
+            {
+              type: "content_block_delta",
+              index,
+              delta: { type: "text_delta", text: block.text },
+            },
+            "content_block_delta",
+          );
+        }
+        sendSse(
+          res,
+          { type: "content_block_stop", index },
+          "content_block_stop",
+        );
+      }
+    }
+    sendSse(
+      res,
+      {
+        type: "message_delta",
+        delta: {
+          stop_reason: response.stop_reason,
+          stop_sequence: response.stop_sequence,
+        },
+        usage: { output_tokens: response.usage.output_tokens },
+      },
+      "message_delta",
+    );
+    sendSse(res, { type: "message_stop" }, "message_stop");
+    res.end();
+  } finally {
+    abort.close();
+  }
+}
+
+function anthropicModelList(runtime: OpenAiRuntime) {
+  const data = runtime.listModels().map((model) => ({
+    type: "model",
+    id: model.id,
+    display_name: model.id,
+    created_at: new Date(0).toISOString(),
+  }));
+  return {
+    data,
+    has_more: false,
+    first_id: data[0]?.id ?? null,
+    last_id: data.at(-1)?.id ?? null,
+  };
+}
+
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -632,31 +972,44 @@ async function handleRequest(
     req.url ?? "/",
     `http://${req.headers.host ?? "localhost"}`,
   );
+  const anthropic = isAnthropicRequest(req);
   if (
     req.method === "GET" &&
     (url.pathname === "/health" || url.pathname === "/healthz")
   ) {
     json(res, 200, {
       status: "ok",
-      service: "acp-openai-proxy",
+      service: "acp-api",
       models: runtime.listModels().length,
     });
     return;
   }
-  if (!bearerAuthorized(req, config.apiKey)) {
-    res.setHeader("www-authenticate", "Bearer");
-    json(
-      res,
-      401,
-      errorBody(
-        "invalid or missing API key",
-        "authentication_error",
-        "invalid_api_key",
-      ),
-    );
+  if (!authorized(req, config.apiKey, anthropic)) {
+    if (anthropic) {
+      json(
+        res,
+        401,
+        anthropicError("invalid or missing API key", "authentication_error"),
+      );
+    } else {
+      res.setHeader("www-authenticate", "Bearer");
+      json(
+        res,
+        401,
+        errorBody(
+          "invalid or missing API key",
+          "authentication_error",
+          "invalid_api_key",
+        ),
+      );
+    }
     return;
   }
   if (req.method === "GET" && url.pathname === "/v1/models") {
+    if (anthropic) {
+      json(res, 200, anthropicModelList(runtime));
+      return;
+    }
     const data = runtime.listModels();
     json(res, 200, { object: "list", data });
     return;
@@ -681,7 +1034,18 @@ async function handleRequest(
       );
       return;
     }
-    json(res, 200, model);
+    json(
+      res,
+      200,
+      anthropic
+        ? {
+            type: "model",
+            id: model.id,
+            display_name: model.id,
+            created_at: new Date(0).toISOString(),
+          }
+        : model,
+    );
     return;
   }
   if (req.method !== "POST") {
@@ -694,7 +1058,19 @@ async function handleRequest(
   }
 
   const body = await readJson(req, config.maxBodyBytes);
-  if (url.pathname === "/v1/chat/completions") {
+  if (url.pathname === "/v1/messages/count_tokens") {
+    const model = ensureModel(runtime, body);
+    const built = buildAnthropicPrompt(
+      body,
+      runtime.capabilitiesForModel(model),
+      { requireMaxTokens: false },
+    );
+    json(res, 200, {
+      input_tokens: estimateTokens(promptTextForUsage(built.blocks)),
+    });
+  } else if (url.pathname === "/v1/messages") {
+    await anthropicMessages(req, res, body, runtime, config, requestId);
+  } else if (url.pathname === "/v1/chat/completions") {
     await chatCompletions(req, res, body, runtime, config, requestId);
   } else if (url.pathname === "/v1/completions") {
     await completions(req, res, body, runtime, config, requestId);
@@ -716,10 +1092,14 @@ export function createOpenAiHttpServer(
   return createServer((req, res) => {
     void handleRequest(req, res, config, runtime).catch((error) => {
       if (res.writableEnded || res.destroyed) return;
-      const failure = asError(error);
+      const failure = asError(error, isAnthropicRequest(req));
       if (res.headersSent) {
-        sendSse(res, failure.body);
-        sendSse(res, "[DONE]");
+        if (isAnthropicRequest(req)) {
+          sendSse(res, failure.body, "error");
+        } else {
+          sendSse(res, failure.body);
+          sendSse(res, "[DONE]");
+        }
         res.end();
       } else {
         json(res, failure.status, failure.body);

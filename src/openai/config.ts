@@ -391,7 +391,8 @@ export async function parseOpenAiConfig(
     server.host ?? DEFAULT_CONFIG.server.host,
     "server.host",
   );
-  const effectiveApiKey = process.env["ACP_OPENAI_PROXY_API_KEY"] ?? apiKey;
+  const effectiveApiKey =
+    process.env.ACP_API_KEY ?? process.env.ACP_OPENAI_PROXY_API_KEY ?? apiKey;
   if (
     !effectiveApiKey &&
     host !== "localhost" &&

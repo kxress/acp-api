@@ -27,6 +27,7 @@ export interface OpenAiAgentConfig {
   models: string[];
   permissionPolicy: PermissionPolicy;
   modelSelection?: OpenAiModelSelection;
+  sessionConfig: Record<string, string>;
   definition: AgentDefinition;
 }
 
@@ -309,6 +310,27 @@ export async function parseOpenAiConfig(
         `Config file '${path}': ${field}.acp_protocol must be 'v1' or 'v2'`,
       );
     }
+    const rawAuthMethodId = rawAgent.auth_method_id ?? rawAgent.authMethodId;
+    const authMethodId =
+      rawAuthMethodId === undefined
+        ? undefined
+        : nonEmptyString(rawAuthMethodId, `${field}.auth_method_id`);
+    const rawSessionConfig =
+      rawAgent.session_config ?? rawAgent.sessionConfig ?? {};
+    if (!isRecord(rawSessionConfig)) {
+      throw new Error(
+        `Config file '${path}': ${field}.session_config must be an object`,
+      );
+    }
+    const sessionConfig: Record<string, string> = {};
+    for (const [configId, value] of Object.entries(rawSessionConfig)) {
+      if (typeof value !== "string") {
+        throw new Error(
+          `Config file '${path}': ${field}.session_config.${configId} must be a string`,
+        );
+      }
+      sessionConfig[configId] = value;
+    }
     const definition: AgentDefinition = {
       command,
       args: [...rawArgs] as string[],
@@ -316,6 +338,8 @@ export async function parseOpenAiConfig(
       displayName: name,
       modelConfigId,
       acpProtocol,
+      authMethodId,
+      sessionConfig,
     };
     agents.push({
       id,
@@ -327,6 +351,7 @@ export async function parseOpenAiConfig(
       models,
       permissionPolicy,
       modelSelection,
+      sessionConfig,
       definition,
     });
   }

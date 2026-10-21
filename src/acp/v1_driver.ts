@@ -23,6 +23,8 @@ export class V1Driver implements ProtocolDriver {
   private readonly app = client({ name: "acp-api" });
   private readonly connection: ClientConnection;
   private initialized?: ProtocolInitialization;
+  private authenticated = false;
+  private authInProgress?: Promise<void>;
 
   constructor(
     definition: AgentDefinition,
@@ -55,10 +57,43 @@ export class V1Driver implements ProtocolDriver {
       capabilities: response.agentCapabilities ?? {},
       authMethods: response.authMethods ?? [],
     };
+    const authMethodId = this.definition.authMethodId;
+    if (authMethodId) {
+      const methods = response.authMethods ?? [];
+      const method = methods.find((candidate) => candidate.id === authMethodId);
+      if (!method) {
+        const available = methods.map((candidate) => candidate.id).join(", ");
+        throw new Error(
+          `Configured ACP auth method '${authMethodId}' was not advertised${available ? `; available methods: ${available}` : ""}`,
+        );
+      }
+      if ("type" in method && method.type !== "agent") {
+        throw new Error(
+          `ACP auth method '${authMethodId}' uses unsupported type '${method.type}'`,
+        );
+      }
+    }
     return this.initialized;
   }
 
+  private async authenticateIfConfigured(): Promise<void> {
+    const methodId = this.definition.authMethodId;
+    if (!methodId || this.authenticated) return;
+
+    const pending = (this.authInProgress ??= this.connection.agent
+      .request("authenticate", { methodId } as never)
+      .then(() => {
+        this.authenticated = true;
+      }));
+    try {
+      await pending;
+    } finally {
+      if (this.authInProgress === pending) this.authInProgress = undefined;
+    }
+  }
+
   async newSession(cwd: string): Promise<ProtocolSessionInfo> {
+    await this.authenticateIfConfigured();
     const response = await this.connection.agent.request("session/new", {
       cwd,
       mcpServers: [],
@@ -78,6 +113,7 @@ export class V1Driver implements ProtocolDriver {
     sessionId: string,
     cwd: string,
   ): Promise<ProtocolSessionInfo> {
+    await this.authenticateIfConfigured();
     const capabilities = this.initialized?.capabilities as
       | Record<string, unknown>
       | undefined;

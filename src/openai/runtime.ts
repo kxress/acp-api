@@ -229,7 +229,7 @@ export class OpenAiRuntime {
         const session = await this.manager.start(
           worker.config.id,
           worker.config.cwd,
-          {},
+          worker.config.sessionConfig,
           undefined,
           worker.config.permissionPolicy,
           { signal },

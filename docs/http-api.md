@@ -64,8 +64,15 @@ Server options include `host`, `port`, `api_key`, `routing_strategy`,
 `max_retries`, `failure_cooldown_seconds`, `retry_backoff_seconds`,
 `max_sessions`, `max_body_bytes`, and `request_timeout_ms`. Each agent entry
 accepts `name`, `instance_id`, `command`, `args`, `cwd`, `env`, `models`,
-`permission`, `acp_protocol`, and optional `model_selection`.
+`permission`, `acp_protocol`, optional `auth_method_id`, optional
+`model_selection`, and optional `session_config`.
 `max_sessions` limits the number of simultaneously open request sessions.
+Set an agent's optional `auth_method_id` to one of the IDs it advertises during
+ACP initialization to complete protocol-driven authentication before creating
+sessions. Authentication methods of type `terminal` are not supported by this
+HTTP server.
+`session_config` is a map of ACP config option IDs to string values applied to
+each new session before generation.
 
 An ACP runtime's provider model stays at its own default unless it supports
 `session/set_config_option` and the entry has `model_selection` configured:

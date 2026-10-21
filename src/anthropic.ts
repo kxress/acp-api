@@ -3,6 +3,7 @@ import {
   buildChatPrompt,
   estimateTokens,
   extractClientToolCalls,
+  jsonSchemaInstruction,
   promptTextForUsage,
   type ClientToolContext,
   type ClientTool,
@@ -196,6 +197,29 @@ export function buildAnthropicPrompt(
   const tools = anthropicTools(body.tools);
   const messages = body.messages.map(message);
   const toolChoice = anthropicToolChoice(body.tool_choice);
+  let outputInstruction = "";
+  const outputConfig = body.output_config;
+  if (outputConfig !== undefined && outputConfig !== null) {
+    if (!isRecord(outputConfig)) {
+      throw new AnthropicRequestError("output_config must be an object");
+    }
+    const format = outputConfig.format;
+    if (format !== undefined && format !== null) {
+      if (!isRecord(format) || format.type !== "json_schema") {
+        throw new AnthropicRequestError(
+          "output_config.format.type must be json_schema",
+        );
+      }
+      try {
+        outputInstruction = jsonSchemaInstruction(format.schema);
+      } catch (error) {
+        if (error instanceof Error && error.name === "OpenAiRequestError") {
+          throw new AnthropicRequestError(error.message);
+        }
+        throw error;
+      }
+    }
+  }
   const systemText =
     typeof body.system === "string"
       ? body.system
@@ -210,7 +234,16 @@ export function buildAnthropicPrompt(
         : "";
   const openAiBody: Record<string, unknown> = {
     messages: [
-      ...(systemText ? [{ role: "system", content: systemText }] : []),
+      ...(systemText || outputInstruction
+        ? [
+            {
+              role: "system",
+              content: [systemText, outputInstruction]
+                .filter(Boolean)
+                .join("\n\n"),
+            },
+          ]
+        : []),
       ...(hasValidMaxTokens
         ? [
             {

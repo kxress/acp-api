@@ -36,6 +36,57 @@ function requireSingleChoice(body: Record<string, unknown>): void {
   }
 }
 
+export function jsonSchemaInstruction(
+  schema: unknown,
+  name?: unknown,
+  description?: unknown,
+): string {
+  if (!isRecord(schema)) {
+    throw new OpenAiRequestError(
+      "JSON schema format requires an object schema",
+    );
+  }
+  const details = [
+    "The client requested structured JSON output.",
+    "Return only a JSON value that matches the supplied JSON Schema.",
+  ];
+  if (typeof name === "string" && name) details.push(`Schema name: ${name}`);
+  if (typeof description === "string" && description)
+    details.push(`Schema description: ${description}`);
+  details.push(`JSON Schema: ${JSON.stringify(schema)}`);
+  return details.join("\n");
+}
+
+function responseFormatInstruction(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  if (!isRecord(value) || typeof value.type !== "string") {
+    throw new OpenAiRequestError("response_format must include a type");
+  }
+  if (value.type === "text") return "";
+  if (value.type === "json_object") {
+    return [
+      "The client requested JSON object output.",
+      "Return only a valid JSON object without markdown fences or surrounding text.",
+    ].join("\n");
+  }
+  if (value.type === "json_schema") {
+    const format = value.json_schema;
+    if (!isRecord(format)) {
+      throw new OpenAiRequestError(
+        "response_format.json_schema must be an object",
+      );
+    }
+    return jsonSchemaInstruction(
+      format.schema,
+      format.name,
+      format.description,
+    );
+  }
+  throw new OpenAiRequestError(
+    "response_format.type must be text, json_object, or json_schema",
+  );
+}
+
 function promptCapabilities(capabilities: unknown): Record<string, unknown> {
   if (!isRecord(capabilities)) return {};
   const prompt =
@@ -463,6 +514,8 @@ export function buildChatPrompt(
   }
   const toolContext = clientToolContext(body);
   const blocks: AcpPromptBlock[] = [];
+  const formatInstruction = responseFormatInstruction(body.response_format);
+  if (formatInstruction) blocks.push({ type: "text", text: formatInstruction });
   if (toolContext.instruction)
     blocks.push({ type: "text", text: toolContext.instruction });
   for (const [index, raw] of body.messages.entries()) {

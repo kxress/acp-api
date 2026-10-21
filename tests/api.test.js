@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createOpenAiHttpServer } from "../src/openai/server.ts";
 import { buildAnthropicPrompt } from "../src/anthropic.ts";
-import { clientToolContext } from "../src/openai/compat.ts";
+import { buildChatPrompt, clientToolContext } from "../src/openai/compat.ts";
 
 const config = {
   apiKey: "local-test-key",
@@ -202,6 +202,33 @@ test("contract: OpenAI required and named tool choices reach the ACP prompt", ()
   assert.equal(named.choice.name, "remember");
   assert.match(named.instruction, /must call remember/);
   assert.doesNotMatch(named.instruction, /"name":"search"/);
+});
+
+test("contract: OpenAI JSON response formats reach the ACP prompt", () => {
+  const messages = [{ role: "user", content: "Return a preference." }];
+  const jsonObject = buildChatPrompt({
+    messages,
+    response_format: { type: "json_object" },
+  });
+  assert.match(jsonObject.blocks[0].text, /valid JSON object/);
+
+  const jsonSchema = buildChatPrompt({
+    messages,
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "Preference",
+        strict: true,
+        schema: {
+          type: "object",
+          properties: { preference: { type: "string" } },
+          required: ["preference"],
+        },
+      },
+    },
+  });
+  assert.match(jsonSchema.blocks[0].text, /Schema name: Preference/);
+  assert.match(jsonSchema.blocks[0].text, /"preference"/);
 });
 
 test("Anthropic tool definitions become ACP prompt instructions", () => {

@@ -17,6 +17,7 @@
     "check": "tsc --noEmit",
     "lint": "biome lint src scripts",
     "test": "node --test",
+    "test:langchain": "node scripts/run-langchain-tests.mjs",
     "format": "biome format --write src scripts README.md docs examples",
     "format:check": "biome format src scripts README.md docs examples",
     "build": "node scripts/build.ts",

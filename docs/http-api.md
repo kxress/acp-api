@@ -10,8 +10,13 @@ Copy [the example configuration](../examples/config.example.json), set the ACP
 agent executable and the model IDs clients will request, then run:
 
 ```powershell
+acp-api doctor --config .\config.json
 acp-api --config .\config.json
 ```
+
+The doctor validates the same configuration used by the server and checks that
+agent working directories and commands are available. It does not launch ACP
+agents or make model requests. Add `--json` for machine-readable results.
 
 The default listener is `127.0.0.1:11435`. Set `server.api_key` or the
 `ACP_API_KEY` environment variable to require authentication. The legacy

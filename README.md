@@ -185,6 +185,16 @@ The default listener is `127.0.0.1:11435`. The example requires the API key
 `server.api_key` for a different key. An API key is mandatory when binding to a
 non-loopback interface.
 
+Check the configuration and agent executables before starting the proxy:
+
+```powershell
+acp-api doctor --config .\config.json
+```
+
+The doctor checks configuration, listener settings, agent working directories,
+and executable lookup. It does not start ACP agents or send model requests. Add
+`--json` for machine-readable results.
+
 Check readiness:
 
 ```sh
@@ -236,6 +246,34 @@ retry a request using a different protocol.
 Any other ACP-compatible stdio command can be configured the same way. The
 agent may expose different models or capabilities over ACP than it exposes in
 its own interactive interface; use the model IDs supported by that adapter.
+
+## Compatibility and CI coverage
+
+The adapter names below are documented launch options. Automated tests use
+local fake ACP processes, so they verify the protocol and HTTP translation
+without requiring provider credentials or installing those third-party agents.
+
+| ACP integration | Example coverage | CI coverage |
+| --- | --- | --- |
+| OpenCode | Starter config uses `opencode acp` | No live OpenCode process; fake ACP v1/v2 fixtures cover protocol paths. |
+| Codex ACP | Launch instructions; configure with the generic `agents[]` shape | No live adapter coverage. |
+| Claude Agent ACP | Launch instructions, including optional v2 setting | No live adapter coverage. |
+| Google Antigravity ACP | Launch instructions; adapter-specific command and args | No live adapter coverage. |
+| Refined Antigravity ACP | Launch instructions; generic config plus its executable environment setting | No live adapter coverage. |
+| Community `agy` ACP | Launch instructions; adapter-specific command and environment | No live adapter coverage. |
+| Other stdio ACP agents | Generic `agents[]` configuration shape documented in this README | Fake ACP v1/v2 fixtures cover protocol paths. |
+
+CI coverage by platform:
+
+| Platform | Installation/config examples | CI coverage |
+| --- | --- | --- |
+| Windows x86_64 | Native and Node archive installation; PowerShell quick start | Native release build and smoke check; tagged releases are downloaded and verified. The full Node test suite does not run on Windows. |
+| Linux x86_64 | Native and Node archive installation; source quick start | Full API/ACP test suite and Node archive build on Ubuntu; native release build and smoke check; tagged release verification. |
+| macOS ARM64 | Native installation instructions; shared JSON agent config | Native release build and smoke check; tagged releases are downloaded and verified. The full Node test suite does not run on macOS. |
+| Other Node.js platforms, including Intel macOS | Node archive installation instructions | Node archive is built and verified on Ubuntu; other platform/architecture combinations are not covered by CI. Intel macOS has no native release. |
+
+The API and ACP tests use mocked clients and local fake ACP processes. CI does
+not install, authenticate, or make live requests through third-party agents.
 
 ## Configuration
 

@@ -77,3 +77,21 @@ npm run lint
 npm test
 npm run build
 ```
+
+## Releases
+
+Tagged releases publish a Node.js archive and standalone native packages for
+Windows x86_64, Linux x86_64, and macOS ARM64. Each archive includes the
+project and dependency licenses, a SHA-256 checksum, and a manifest. The
+release workflow checks the tag against `src/version.ts`, validates each
+package, publishes the assets, and downloads them again to verify the public
+release.
+
+Use the Node archive with Node.js 24.12 or newer, or install a native package
+from the repository's Releases page. For a local native package, run
+`npm run release` with Node.js 26 or newer. Install a verified local package
+with:
+
+```powershell
+npm run install-release -- --release-dir .\dist\releases\acp-api-0.1.0-windows-x86_64
+```

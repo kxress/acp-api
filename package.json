@@ -21,6 +21,10 @@
     "format": "biome format --write src scripts README.md docs examples",
     "format:check": "biome format src scripts README.md docs examples",
     "build": "node scripts/build.ts",
+    "build:native": "node scripts/build_native.ts",
+    "release": "node scripts/release.ts",
+    "install-release": "node scripts/release.ts install",
+    "verify-public-release": "node scripts/verify_public_release.ts",
     "start": "node dist/acp-api.mjs --config config.json"
   },
   "dependencies": {

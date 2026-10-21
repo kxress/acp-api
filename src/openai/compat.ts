@@ -484,10 +484,14 @@ export function buildChatPrompt(
         text: `function_call: ${JSON.stringify(legacyFunctionCall)}`,
       });
     const name = typeof raw.name === "string" ? ` (${raw.name})` : "";
+    const toolCallId =
+      role === "tool" && typeof raw.tool_call_id === "string"
+        ? ` [tool_call_id=${raw.tool_call_id}]`
+        : "";
     const prefix =
       role === "system" || role === "developer"
         ? `System${name}: `
-        : `${role}${name}: `;
+        : `${role}${name}${toolCallId}: `;
     if (!content.length) {
       blocks.push({ type: "text", text: prefix.trimEnd() });
     } else {

@@ -250,7 +250,8 @@ function sseHeaders(res: ServerResponse): void {
 
 function sendSse(res: ServerResponse, data: unknown, event?: string): void {
   if (event) res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
+  const payload = data === "[DONE]" ? "[DONE]" : JSON.stringify(data);
+  res.write(`data: ${payload}\n\n`);
 }
 
 function sendChatChunk(

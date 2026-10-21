@@ -66,7 +66,8 @@ Remote HTTP and HTTPS resource URLs are forwarded without being downloaded.
 OpenAI-hosted `file_id` attachments are not supported by local ACP agents.
 
 See [the HTTP API guide](docs/openai-api.md) for the configuration fields and
-request details.
+request details. The [mocked API contract](docs/api-contract.md) describes the
+offline compatibility test suite.
 
 ## Development
 

@@ -1,8 +1,9 @@
 # OpenAI- and Anthropic-compatible HTTP APIs
 
-This mode launches configured ACP agents and exposes an OpenAI-compatible HTTP
-APIs. Requests are translated into ACP session prompts; the proxy does not call
-OpenAI, Anthropic, or another model provider directly.
+This mode launches configured ACP agents and exposes OpenAI- and
+Anthropic-compatible HTTP APIs. Requests are translated into ACP session
+prompts; the proxy does not call OpenAI, Anthropic, or another model provider
+directly.
 
 ## Start
 
@@ -94,3 +95,6 @@ runtime advertises the matching prompt capability. Remote URLs are forwarded to
 the agent and are not downloaded by the proxy. OpenAI-hosted `file_id`
 attachments are not supported because a local ACP runtime cannot dereference
 them.
+
+See the [mocked API contract](api-contract.md) for the tested OpenAI and
+Anthropic request, response, tool-loop, streaming, and authentication subset.

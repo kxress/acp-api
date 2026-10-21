@@ -13,18 +13,18 @@ async function isFile(path: string): Promise<boolean> {
 
 export async function findExecutablePath(
   command: string,
-  pathValue = process.env["PATH"] ?? "",
+  pathValue = process.env.PATH ?? "",
 ): Promise<string | undefined> {
   const windows = process.platform === "win32";
   const hasExtension = windows && /\.[^\\/]+$/.test(command);
-  const extensions = (process.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD")
+  const extensions = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
     .split(";")
     .filter((extension) => extension.toLowerCase() !== ".exe");
   const candidates =
     windows && !hasExtension
       ? [
-          command + ".exe",
-          ...extensions.map((extension) => command + extension),
+          `${command}.exe`,
+          ...extensions.map((extension) => `${command}${extension}`),
         ]
       : [command];
   const hasDirectory = command.includes("\\") || command.includes("/");
@@ -74,20 +74,20 @@ export async function resolveWindowsExecutable(
   command: string,
 ): Promise<string> {
   if (process.platform !== "win32") return command;
-  const pathExt = (process.env["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD").split(";");
+  const pathExt = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";");
   const hasExtension = /\.[^\\/]+$/.test(command);
   const candidates = hasExtension
     ? [command]
     : [
-        command + ".exe",
+        `${command}.exe`,
         ...pathExt
           .filter((ext) => ext.toLowerCase() !== ".exe")
-          .map((ext) => command + ext),
+          .map((ext) => `${command}${ext}`),
       ];
   const hasDirectory = command.includes("\\") || command.includes("/");
   const roots = hasDirectory
     ? [""]
-    : (process.env["PATH"] ?? "").split(";").filter(Boolean);
+    : (process.env.PATH ?? "").split(";").filter(Boolean);
   for (const root of roots) {
     for (const candidate of candidates) {
       const full = root
@@ -120,7 +120,7 @@ export async function startAgent(definition: AgentDefinition, cwd: string) {
   }
   const isBatch =
     process.platform === "win32" && /\.(cmd|bat)$/i.test(resolved);
-  const command = isBatch ? (process.env["COMSPEC"] ?? "cmd.exe") : resolved;
+  const command = isBatch ? (process.env.COMSPEC ?? "cmd.exe") : resolved;
   const args = isBatch
     ? ["/d", "/c", "%ACPAPI_CONFIGURED_COMMAND%"]
     : definition.args;

@@ -29,7 +29,7 @@ function schemaSample(schema) {
   }
   if (type === "array") return [];
   if (Array.isArray(schema.enum) && schema.enum.length) return schema.enum[0];
-  if (type === "string") return "mock memory value";
+  if (type === "string") return "mock value";
   if (type === "integer" || type === "number") return 1;
   if (type === "boolean") return false;
   return null;
@@ -44,8 +44,8 @@ function fakeResponse(model, blocks) {
   if (model === "mock-structured") {
     return prompt.includes("JSON Schema:")
       ? JSON.stringify({
-          category: "mock category",
-          preference: "mock preference",
+          label: "mock label",
+          value: "mock value",
         })
       : "structured output schema was not forwarded";
   }
@@ -71,13 +71,13 @@ const runtime = {
   capabilitiesForModel: () => ({}),
   supportsInput: () => true,
   generate: async (model, blocks, _key, _signal, onSelected, onText) => {
-    onSelected?.({ workerId: "langchain-fake-acp" });
+    onSelected?.({ workerId: "api-completeness-fake-acp" });
     const text = fakeResponse(model, blocks);
     if (onText) await onText(text);
     return {
       text,
       stopReason: "end_turn",
-      workerId: "langchain-fake-acp",
+      workerId: "api-completeness-fake-acp",
     };
   },
 };

@@ -1,17 +1,16 @@
-# OpenAI- and Anthropic-compatible HTTP APIs
+# HTTP API guide
 
-This mode launches configured ACP agents and exposes OpenAI- and
+`acp-api` launches configured ACP agents and exposes OpenAI- and
 Anthropic-compatible HTTP APIs. Requests are translated into ACP session
-prompts; the proxy does not call OpenAI, Anthropic, or another model provider
-directly.
+prompts; the proxy does not call model providers directly.
 
 ## Start
 
-Copy [the example configuration](../examples/openai-config.json), set the ACP
-agent executable and model IDs, then run:
+Copy [the example configuration](../examples/config.example.json), set the ACP
+agent executable and the model IDs clients will request, then run:
 
 ```powershell
-acp-api --config .\openai-config.json
+acp-api --config .\config.json
 ```
 
 The default listener is `127.0.0.1:11435`. Set `server.api_key` or the
@@ -101,4 +100,5 @@ attachments are not supported because a local ACP runtime cannot dereference
 them.
 
 See the [mocked API contract](api-contract.md) for the tested OpenAI and
-Anthropic request, response, tool-loop, streaming, and authentication subset.
+Anthropic request, response, tool-loop, streaming, authentication, and client
+SDK subset.

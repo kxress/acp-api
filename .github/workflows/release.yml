@@ -24,7 +24,12 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
       - run: npm ci
+      - run: python -m pip install -r requirements-api-completeness.txt
+      - run: npm run test:api-completeness
       - name: Verify release tag
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:

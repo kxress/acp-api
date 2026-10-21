@@ -1,60 +1,64 @@
 # Mocked API contract
 
-Run the HTTP contract suite with `npm test`. It starts the HTTP server
+Run the main HTTP contract suite with `npm test`. It starts the server
 in-process and injects a fake ACP runtime with fixed text or tool-call returns.
-Tests use only local loopback HTTP and never contact OpenAI, Anthropic, or
-another model service.
+The tests use loopback HTTP only; they do not call a model provider.
 
-The ACP session lifecycle tests also launch a fake local agent for both ACP v1
-and v2. They verify that each generation gets and closes an isolated session
-while the agent process and connection stay warm.
+ACP session lifecycle tests also launch a fake local agent with ACP v1 and v2.
+They verify that each generation gets and closes an isolated session while the
+agent process and ACP connection stay warm.
 
-The optional LangChain client suite uses the official Python provider clients
-and LangMem against the same kind of local fake ACP runtime. Install its pinned
-test dependencies and run `npm run test:langchain` from an activated virtual
-environment:
+The optional client suite exercises the official OpenAI and Anthropic Python
+SDKs against a local fake ACP runtime. Install its pinned dependencies and run
+it from an activated virtual environment:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements-langchain-test.txt
-npm run test:langchain
+python -m pip install -r requirements-api-completeness.txt
+npm run test:api-completeness
 ```
+
+On macOS or Linux, activate with `source .venv/bin/activate` instead.
+
+All responses in this suite come from the fake runtime. It requires no API
+credentials, provider access, or usage spend.
 
 ## Supported contract
 
-The tested OpenAI-compatible surface is:
+The mocked tests cover these OpenAI-compatible routes:
 
-- `GET /v1/models` with Bearer authentication.
-- `POST /v1/chat/completions` for text, streamed text, function tool calls, and
-  client tool results in follow-up messages, plus JSON object and JSON Schema
-  response formats.
-- `POST /v1/responses` for function tool calls and streamed function-call events.
-- OpenAI-shaped authentication errors and standard completion response fields.
+- `GET /v1/models` and `GET /v1/models/{model}` with Bearer authentication.
+- `POST /v1/chat/completions` for text, streaming, function tools, client tool
+  results in follow-up messages, JSON object output, and JSON Schema output.
+- `POST /v1/completions` for text completions.
+- `POST /v1/responses` for text, function calls, and streamed function-call
+  events.
+- OpenAI-shaped authentication errors and completion response fields.
 
-The tested Anthropic-compatible surface is:
+The mocked tests cover these Anthropic-compatible routes:
 
-- `GET /v1/models` with `x-api-key` and `anthropic-version`.
-- `POST /v1/messages` for text, streamed text, `tool_use`, and client tool
-  results in follow-up messages, plus JSON Schema output format.
-- `POST /v1/messages/count_tokens`, using the local token estimate without
+- `GET /v1/models` and `GET /v1/models/{model}` with `x-api-key` and
+  `anthropic-version`.
+- `POST /v1/messages` for text, streaming, `tool_use`, client tool results in
+  follow-up messages, and JSON Schema output.
+- `POST /v1/messages/count_tokens`, using a local token estimate without
   invoking the fake runtime.
 - Anthropic-shaped authentication errors and Messages response fields.
 
-Both tool formats follow the client tool loop: the API returns a tool request,
-the client executes it, and the next API request includes the result. ACP-agent
-tools remain available to the ACP agent itself.
-
-The real-client suite covers `ChatOpenAI`, `ChatAnthropic`, both clients'
-streaming and tool-result round trips, and LangMem's structured memory manager
-with each provider. All model responses come from the fake ACP runtime.
+The client SDK suite checks model listing, OpenAI Completions, Chat Completions,
+Responses, streaming, tool-choice handling, tool-result round trips, and JSON
+Schema request handling. Both tool formats use the client tool loop: the API
+returns a tool request, the client executes it, and the next API request
+includes the result. ACP-agent tools remain available to the ACP agent itself.
 
 ## Compatibility boundary
 
-This contract targets official OpenAI Chat Completions and Anthropic Messages
-features exercised by LangMem and the tested LangChain clients. JSON Schema
-requests are passed to the ACP agent as instructions; ACP does not guarantee
-schema-constrained output. ACP also does not expose provider-neutral controls
-for sampling or hard output-token limits, so `max_tokens`, usage, and token
-counting are best-effort prompt guidance or local estimates. Third-party-only
-request extensions are outside this contract.
+This project implements the documented request and response shapes listed
+above; it does not claim complete coverage of every feature in either provider
+API. JSON Schema requests are passed to the ACP agent as instructions, so ACP
+does not guarantee schema-constrained output. ACP also does not expose
+provider-neutral controls for sampling or hard output-token limits. `max_tokens`,
+reported usage, and token-count results are best-effort prompt guidance or local
+estimates. Provider-specific extensions outside the documented contract are
+not part of the compatibility target.

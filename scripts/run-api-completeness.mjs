@@ -18,7 +18,7 @@ const python = existsSync(localPython)
     : "python3";
 const result = spawnSync(
   python,
-  [path.join(root, "tests", "langchain_integration.py")],
+  [path.join(root, "tests", "api_completeness.py")],
   { cwd: root, stdio: "inherit" },
 );
 

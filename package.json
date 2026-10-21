@@ -17,7 +17,7 @@
     "check": "tsc --noEmit",
     "lint": "biome lint .",
     "test": "node --test",
-    "test:langchain": "node scripts/run-langchain-tests.mjs",
+    "test:api-completeness": "node scripts/run-api-completeness.mjs",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "build": "node scripts/build.ts",

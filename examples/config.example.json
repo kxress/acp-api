@@ -9,11 +9,11 @@
   },
   "agents": [
     {
-      "name": "opencode",
-      "instance_id": "opencode-a",
+      "name": "example-agent",
+      "instance_id": "example-agent-a",
       "command": "opencode",
       "args": ["acp"],
-      "models": ["opencode"],
+      "models": ["local-model"],
       "permission": "deny"
     }
   ]

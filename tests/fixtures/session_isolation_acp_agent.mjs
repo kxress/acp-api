@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 
 const logPath = process.env.ACP_TEST_LOG;
 const protocol = process.env.ACP_TEST_PROTOCOL ?? "v1";
+const closeSupported = process.env.ACP_TEST_SESSION_CLOSE !== "unsupported";
 const sessions = new Map();
 let nextSession = 1;
 
@@ -34,7 +35,12 @@ for await (const line of createInterface({ input: process.stdin })) {
             info: { name: "fake-agent", version: "1.0.0" },
             capabilities: {},
           }
-        : { protocolVersion: 1, agentCapabilities: {} },
+        : {
+            protocolVersion: 1,
+            agentCapabilities: closeSupported
+              ? { sessionCapabilities: { close: {} } }
+              : {},
+          },
     );
   } else if (request.method === "session/new") {
     const sessionId = `session-${nextSession++}`;
@@ -115,3 +121,5 @@ for await (const line of createInterface({ input: process.stdin })) {
     );
   }
 }
+
+log({ kind: "process_exit" });

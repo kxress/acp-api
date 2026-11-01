@@ -253,6 +253,10 @@ export class V2Driver implements ProtocolDriver {
     return modesFromOptions(updated);
   }
 
+  supportsSessionClose(): boolean {
+    return true;
+  }
+
   async closeSession(sessionId: string): Promise<void> {
     await this.connection.agent.request("session/close", { sessionId });
   }

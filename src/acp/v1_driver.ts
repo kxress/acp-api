@@ -189,6 +189,13 @@ export class V1Driver implements ProtocolDriver {
     return response as Record<string, unknown>;
   }
 
+  supportsSessionClose(): boolean {
+    const capabilities = this.initialized?.capabilities as
+      | { sessionCapabilities?: { close?: unknown } }
+      | undefined;
+    return capabilities?.sessionCapabilities?.close != null;
+  }
+
   async closeSession(sessionId: string): Promise<void> {
     await this.connection.agent.request("session/close", { sessionId });
   }

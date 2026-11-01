@@ -67,9 +67,10 @@ export class V1Driver implements ProtocolDriver {
           `Configured ACP auth method '${authMethodId}' was not advertised${available ? `; available methods: ${available}` : ""}`,
         );
       }
-      if ("type" in method && method.type !== "agent") {
+      const { type } = method as { type?: string };
+      if (type !== undefined && type !== "agent") {
         throw new Error(
-          `ACP auth method '${authMethodId}' uses unsupported type '${method.type}'`,
+          `ACP auth method '${authMethodId}' uses unsupported type '${type}'`,
         );
       }
     }
@@ -80,11 +81,12 @@ export class V1Driver implements ProtocolDriver {
     const methodId = this.definition.authMethodId;
     if (!methodId || this.authenticated) return;
 
-    const pending = (this.authInProgress ??= this.connection.agent
+    this.authInProgress ??= this.connection.agent
       .request("authenticate", { methodId } as never)
       .then(() => {
         this.authenticated = true;
-      }));
+      });
+    const pending = this.authInProgress;
     try {
       await pending;
     } finally {

@@ -119,11 +119,12 @@ export class V2Driver implements ProtocolDriver {
     const methodId = this.definition.authMethodId;
     if (!methodId || this.authenticated) return;
 
-    const pending = (this.authInProgress ??= this.connection.agent
+    this.authInProgress ??= this.connection.agent
       .request("auth/login", { methodId })
       .then(() => {
         this.authenticated = true;
-      }));
+      });
+    const pending = this.authInProgress;
     try {
       await pending;
     } finally {

@@ -185,13 +185,16 @@ function abortError(signal: AbortSignal): Error {
     : new DOMException("Request aborted", "AbortError");
 }
 
-async function raceWithAbort<T>(
+export async function raceWithAbort<T>(
   promise: Promise<T>,
   signal?: AbortSignal,
   onAbort?: (error: Error) => void,
 ): Promise<T> {
   if (!signal) return await promise;
   if (signal.aborted) {
+    // The abandoned promise still settles, often by rejecting once the
+    // aborted startup closes the agent connection.
+    promise.catch(() => undefined);
     const error = abortError(signal);
     onAbort?.(error);
     throw error;

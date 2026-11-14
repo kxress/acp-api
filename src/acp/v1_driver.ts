@@ -23,6 +23,8 @@ export class V1Driver implements ProtocolDriver {
   private readonly app = client({ name: "acp-api" });
   private readonly connection: ClientConnection;
   private initialized?: ProtocolInitialization;
+  private authenticated = false;
+  private authInProgress?: Promise<void>;
 
   constructor(
     definition: AgentDefinition,
@@ -55,10 +57,45 @@ export class V1Driver implements ProtocolDriver {
       capabilities: response.agentCapabilities ?? {},
       authMethods: response.authMethods ?? [],
     };
+    const authMethodId = this.definition.authMethodId;
+    if (authMethodId) {
+      const methods = response.authMethods ?? [];
+      const method = methods.find((candidate) => candidate.id === authMethodId);
+      if (!method) {
+        const available = methods.map((candidate) => candidate.id).join(", ");
+        throw new Error(
+          `Configured ACP auth method '${authMethodId}' was not advertised${available ? `; available methods: ${available}` : ""}`,
+        );
+      }
+      const { type } = method as { type?: string };
+      if (type !== undefined && type !== "agent") {
+        throw new Error(
+          `ACP auth method '${authMethodId}' uses unsupported type '${type}'`,
+        );
+      }
+    }
     return this.initialized;
   }
 
+  private async authenticateIfConfigured(): Promise<void> {
+    const methodId = this.definition.authMethodId;
+    if (!methodId || this.authenticated) return;
+
+    this.authInProgress ??= this.connection.agent
+      .request("authenticate", { methodId } as never)
+      .then(() => {
+        this.authenticated = true;
+      });
+    const pending = this.authInProgress;
+    try {
+      await pending;
+    } finally {
+      if (this.authInProgress === pending) this.authInProgress = undefined;
+    }
+  }
+
   async newSession(cwd: string): Promise<ProtocolSessionInfo> {
+    await this.authenticateIfConfigured();
     const response = await this.connection.agent.request("session/new", {
       cwd,
       mcpServers: [],
@@ -78,6 +115,7 @@ export class V1Driver implements ProtocolDriver {
     sessionId: string,
     cwd: string,
   ): Promise<ProtocolSessionInfo> {
+    await this.authenticateIfConfigured();
     const capabilities = this.initialized?.capabilities as
       | Record<string, unknown>
       | undefined;
@@ -151,6 +189,13 @@ export class V1Driver implements ProtocolDriver {
       modeId,
     });
     return response as Record<string, unknown>;
+  }
+
+  supportsSessionClose(): boolean {
+    const capabilities = this.initialized?.capabilities as
+      | { sessionCapabilities?: { close?: unknown } }
+      | undefined;
+    return capabilities?.sessionCapabilities?.close != null;
   }
 
   async closeSession(sessionId: string): Promise<void> {

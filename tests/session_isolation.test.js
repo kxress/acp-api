@@ -6,19 +6,18 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { OpenAiRuntime } from "../src/openai/runtime.ts";
 
-async function verifySessionIsolation(protocol) {
-  const tempDir = await mkdtemp(join(tmpdir(), "acp-api-session-test-"));
-  const logPath = join(tempDir, "agent.jsonl");
-  const fixture = fileURLToPath(
-    new URL("./fixtures/session_isolation_acp_agent.mjs", import.meta.url),
-  );
+const fixture = fileURLToPath(
+  new URL("./fixtures/session_isolation_acp_agent.mjs", import.meta.url),
+);
+
+function startFakeRuntime(tempDir, protocol, env) {
   const definition = {
     command: process.execPath,
     args: [fixture],
-    env: { ACP_TEST_LOG: logPath, ACP_TEST_PROTOCOL: protocol },
+    env,
     acpProtocol: protocol,
   };
-  const runtime = await OpenAiRuntime.start({
+  return OpenAiRuntime.start({
     path: tempDir,
     host: "127.0.0.1",
     port: 0,
@@ -37,12 +36,28 @@ async function verifySessionIsolation(protocol) {
         command: process.execPath,
         args: [fixture],
         cwd: tempDir,
-        env: { ACP_TEST_LOG: logPath, ACP_TEST_PROTOCOL: protocol },
+        env,
         models: ["test-model"],
         permissionPolicy: "deny_all",
         definition,
       },
     ],
+  });
+}
+
+async function readLog(logPath) {
+  return (await readFile(logPath, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
+async function verifySessionIsolation(protocol) {
+  const tempDir = await mkdtemp(join(tmpdir(), "acp-api-session-test-"));
+  const logPath = join(tempDir, "agent.jsonl");
+  const runtime = await startFakeRuntime(tempDir, protocol, {
+    ACP_TEST_LOG: logPath,
+    ACP_TEST_PROTOCOL: protocol,
   });
 
   try {
@@ -74,10 +89,7 @@ async function verifySessionIsolation(protocol) {
       signal,
     );
 
-    const entries = (await readFile(logPath, "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+    const entries = await readLog(logPath);
     const processStarts = entries.filter(
       (entry) => entry.kind === "process_start",
     );
@@ -118,4 +130,43 @@ test("ACP v1 uses isolated sessions on one warm agent", async () => {
 
 test("ACP v2 uses isolated sessions on one warm agent", async () => {
   await verifySessionIsolation("v2");
+});
+
+test("ACP v1 replaces an agent that cannot close sessions", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "acp-api-session-test-"));
+  const logPath = join(tempDir, "agent.jsonl");
+  const runtime = await startFakeRuntime(tempDir, "v1", {
+    ACP_TEST_LOG: logPath,
+    ACP_TEST_PROTOCOL: "v1",
+    ACP_TEST_SESSION_CLOSE: "unsupported",
+  });
+
+  try {
+    const signal = AbortSignal.timeout(5000);
+    for (const conversation of ["conversation-one", "conversation-two"]) {
+      await runtime.generate(
+        "test-model",
+        [{ type: "text", text: `user: ${conversation}` }],
+        conversation,
+        signal,
+      );
+    }
+    const entries = await readLog(logPath);
+    const kinds = entries.map((entry) => entry.kind);
+
+    assert.deepEqual(kinds, [
+      "process_start",
+      "session_new",
+      "prompt",
+      "process_exit",
+      "process_start",
+      "session_new",
+      "prompt",
+      "process_exit",
+    ]);
+    assert.equal(runtime.manager.sessionCount, 0);
+  } finally {
+    await runtime.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
 });

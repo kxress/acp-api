@@ -67,6 +67,7 @@ export interface ProtocolDriver {
     configOptions: Array<Record<string, unknown>>,
     modes?: Record<string, unknown>,
   ): Promise<Record<string, unknown> | undefined>;
+  supportsSessionClose(): boolean;
   closeSession(sessionId: string): Promise<void>;
   closeConnection(error?: unknown): void;
 }

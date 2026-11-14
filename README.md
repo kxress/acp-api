@@ -319,7 +319,11 @@ router supports `sticky_failover`, `primary_failover`, `round_robin`, and
 agent.
 
 Each agent entry can set `name`, `instance_id`, `command`, `args`, `cwd`, `env`,
-`models`, `permission`, `acp_protocol`, and `model_selection`. Server settings
+`models`, `permission`, `acp_protocol`, `auth_method_id`, `model_selection`,
+and `session_config`. Set `auth_method_id` to an advertised protocol-driven ACP
+authentication method when the agent requires authentication. Set `session_config`
+to string-valued ACP config options that should be applied to every new session.
+Server settings
 include `host`, `port`, `api_key`, `routing_strategy`, `max_retries`,
 `failure_cooldown_seconds`, `retry_backoff_seconds`, `max_sessions`,
 `max_body_bytes`, and `request_timeout_ms`. See the

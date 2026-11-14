@@ -56,6 +56,8 @@ interface ManagedAgent {
   earlyUpdates: Map<string, NormalizedAcpUpdate[]>;
   closedSessionIds: Set<string>;
   closedSessionOrder: string[];
+  pendingSessions: number;
+  retiring: boolean;
   closed: boolean;
   closePromise?: Promise<void>;
 }
@@ -183,13 +185,16 @@ function abortError(signal: AbortSignal): Error {
     : new DOMException("Request aborted", "AbortError");
 }
 
-async function raceWithAbort<T>(
+export async function raceWithAbort<T>(
   promise: Promise<T>,
   signal?: AbortSignal,
   onAbort?: (error: Error) => void,
 ): Promise<T> {
   if (!signal) return await promise;
   if (signal.aborted) {
+    // The abandoned promise still settles, often by rejecting once the
+    // aborted startup closes the agent connection.
+    promise.catch(() => undefined);
     const error = abortError(signal);
     onAbort?.(error);
     throw error;
@@ -474,6 +479,8 @@ export class SessionManager {
         earlyUpdates: new Map(),
         closedSessionIds: new Set(),
         closedSessionOrder: [],
+        pendingSessions: 0,
+        retiring: false,
         closed: false,
       };
       const timedOut = new Promise<never>((_, reject) => {
@@ -606,6 +613,7 @@ export class SessionManager {
     }
     let session: ManagedSession | undefined;
     let startupTimer: ReturnType<typeof setTimeout> | undefined;
+    agent.pendingSessions++;
     const startup = async () => {
       const sessionResponse = loadSessionId
         ? await agent.driver.resumeSession(loadSessionId, cwd)
@@ -721,6 +729,27 @@ export class SessionManager {
       );
     } finally {
       if (startupTimer !== undefined) clearTimeout(startupTimer);
+      agent.pendingSessions--;
+      await this.closeRetiredAgent(agent);
+    }
+  }
+
+  // An agent without session/close keeps each session's resources until it
+  // exits, so new sessions go to a fresh process and this one stops when idle.
+  private retireAgent(agent: ManagedAgent): void {
+    agent.retiring = true;
+    if (this.managedAgents.get(agent.id) === agent) {
+      this.managedAgents.delete(agent.id);
+    }
+  }
+
+  private async closeRetiredAgent(agent: ManagedAgent): Promise<void> {
+    if (
+      agent.retiring &&
+      agent.sessions.size === 0 &&
+      agent.pendingSessions === 0
+    ) {
+      await this.closeAgent(agent);
     }
   }
 
@@ -1208,6 +1237,11 @@ export class SessionManager {
     }
     this.removeSession(session);
     if (session.agent.closed) return;
+    if (!session.driver.supportsSessionClose()) {
+      this.retireAgent(session.agent);
+      await this.closeRetiredAgent(session.agent);
+      return;
+    }
     let closeTimer: ReturnType<typeof setTimeout> | undefined;
     const closeRequest = session.driver
       .closeSession(session.acpSessionId)

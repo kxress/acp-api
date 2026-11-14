@@ -3,6 +3,7 @@ import {
   type ClientConnection,
   ndJsonStream,
 } from "@agentclientprotocol/sdk/experimental/v2";
+import type { AuthMethod } from "@agentclientprotocol/sdk/experimental/v2";
 import type { AgentDefinition } from "../agents/types.ts";
 import type { startAgent } from "../runtime/process.ts";
 import { interceptV2SessionUpdates } from "./session_update_stream.ts";
@@ -30,6 +31,8 @@ export class V2Driver implements ProtocolDriver {
   private readonly connection: ClientConnection;
   private readonly activeTurns = new Map<string, ActiveTurn>();
   private initialized?: ProtocolInitialization;
+  private authenticated = false;
+  private authInProgress?: Promise<void>;
 
   constructor(
     definition: AgentDefinition,
@@ -65,7 +68,7 @@ export class V2Driver implements ProtocolDriver {
     let response: {
       protocolVersion: number;
       capabilities?: unknown;
-      authMethods?: unknown[];
+      authMethods?: AuthMethod[];
     };
     try {
       response = await this.connection.agent.request("initialize", {
@@ -89,10 +92,48 @@ export class V2Driver implements ProtocolDriver {
       capabilities: response.capabilities ?? {},
       authMethods: response.authMethods ?? [],
     };
+    const authMethodId = this.definition.authMethodId;
+    if (authMethodId) {
+      const methods = response.authMethods ?? [];
+      const method = methods.find(
+        (candidate) => candidate.methodId === authMethodId,
+      );
+      if (!method) {
+        const available = methods
+          .map((candidate) => candidate.methodId)
+          .join(", ");
+        throw new Error(
+          `Configured ACP auth method '${authMethodId}' was not advertised${available ? `; available methods: ${available}` : ""}`,
+        );
+      }
+      if (method.type !== "agent") {
+        throw new Error(
+          `ACP auth method '${authMethodId}' uses unsupported type '${method.type}'`,
+        );
+      }
+    }
     return this.initialized;
   }
 
+  private async authenticateIfConfigured(): Promise<void> {
+    const methodId = this.definition.authMethodId;
+    if (!methodId || this.authenticated) return;
+
+    this.authInProgress ??= this.connection.agent
+      .request("auth/login", { methodId })
+      .then(() => {
+        this.authenticated = true;
+      });
+    const pending = this.authInProgress;
+    try {
+      await pending;
+    } finally {
+      if (this.authInProgress === pending) this.authInProgress = undefined;
+    }
+  }
+
   async newSession(cwd: string): Promise<ProtocolSessionInfo> {
+    await this.authenticateIfConfigured();
     const response = await this.connection.agent.request("session/new", {
       cwd,
     });
@@ -110,6 +151,7 @@ export class V2Driver implements ProtocolDriver {
     sessionId: string,
     cwd: string,
   ): Promise<ProtocolSessionInfo> {
+    await this.authenticateIfConfigured();
     const capabilities = this.initialized?.capabilities as
       | Record<string, unknown>
       | undefined;
@@ -210,6 +252,10 @@ export class V2Driver implements ProtocolDriver {
       option,
     );
     return modesFromOptions(updated);
+  }
+
+  supportsSessionClose(): boolean {
+    return true;
   }
 
   async closeSession(sessionId: string): Promise<void> {

@@ -229,6 +229,11 @@ proxy does not install these agents or choose their provider backends.
 | Refined Antigravity ACP | `refined-antigravity-acp` | `[]` | Install with `npm install -g @simonepri/refined-antigravity-acp`; set `REFINED_AGY_ACP_BIN` to the official adapter path. |
 | `agy` ACP adapter | `agy-acp-windows-x64.exe` on Windows x64 | adapter-specific | [Community adapter](https://github.com/shubzkothekar/antigravity-acp); configure `AGY_BIN` for the installed Antigravity CLI and review its provider-account terms notice. |
 
+> **Gemini account warning:** I was banned while using an Antigravity adapter
+> with a Gemini alternate account. Do not consider Antigravity use with Gemini
+> accounts safe. For a more organic usage pattern, I recommend
+> [`acp-mcp`](https://github.com/kxress/acp-mcp).
+
 Claude Agent ACP can be configured for ACP v1 or v2 when the adapter supports
 it. To select its experimental v2 mode, configure both the protocol and the
 adapter's opt-in environment variable:
